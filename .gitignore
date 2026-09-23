@@ -1,0 +1,32 @@
+.idea/
+.venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 打包产物与中间文件
+build/
+dist/
+
+# 本地运行时数据（数据库、日志）
+data/
+logs/
+
+# Personal settings, screenshots, archives and local publishing workspace
+config.json
+.env
+.env.*
+*.db
+*.db-*
+*.sqlite*
+*.backup-*
+*.xlsx
+*.zip
+*.7z
+*.exe
+release-work/
+private/
+*.pem
+*.key

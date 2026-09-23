@@ -1,0 +1,8 @@
+{
+  "window_title_keyword": "原神",
+  "scan_frequency_minutes": null,
+  "online_only": false,
+  "save_scan_evidence": true,
+  "save_profile_screenshots": true,
+  "startup_delay_seconds": 3.0
+}

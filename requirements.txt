@@ -1,0 +1,26 @@
+# 原神好友状态监测器 - 依赖清单
+# Python 3.10+ / Windows
+
+# OCR 引擎（新版 rapidocr，onnxruntime 推理后端，支持 Python 3.13）
+rapidocr>=3.9.0
+onnxruntime>=1.17.0
+
+# 图形界面
+PySide6>=6.5.0
+
+# 屏幕截图
+mss>=9.0.1
+
+# 图像处理
+Pillow>=10.0.0
+fonttools>=4.50.0
+numpy>=1.24.0
+
+# Windows 窗口定位与鼠标模拟
+pywin32>=306
+
+# Excel 导出
+openpyxl>=3.1.2
+
+# MySQL 导出（预留）
+PyMySQL>=1.1.0

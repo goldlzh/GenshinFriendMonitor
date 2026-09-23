@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "friend.v1": {
+      "$id": "friend.v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "nickname", "level", "signature", "last_seen", "status_hint", "confidence", "source"],
+      "properties": {
+        "uid": { "type": ["string", "null"], "description": "原神 UID，9 位数字字符串" },
+        "nickname": { "type": ["string", "null"], "description": "好友昵称" },
+        "level": { "type": ["integer", "null"], "description": "冒险等阶/世界等级" },
+        "signature": { "type": ["string", "null"], "description": "个性签名" },
+        "last_seen": { "type": ["string", "null"], "description": "最近登录时间表达（离线好友）" },
+        "status_hint": { "type": ["string", "null"], "description": "原文中关于状态的原始措辞" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "source": { "type": "string", "description": "提取来源的原文片段" }
+      }
+    },
+    "online_status_snapshot.v1": {
+      "$id": "online_status_snapshot.v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timestamp", "total", "online_count", "offline_count", "friends"],
+      "properties": {
+        "timestamp": { "type": "string", "description": "快照时间 ISO8601" },
+        "total": { "type": "integer", "minimum": 0 },
+        "online_count": { "type": "integer", "minimum": 0 },
+        "offline_count": { "type": "integer", "minimum": 0 },
+        "friends": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["uid", "nickname", "level", "status", "status_confidence", "last_seen"],
+            "properties": {
+              "uid": { "type": ["string", "null"] },
+              "nickname": { "type": ["string", "null"] },
+              "level": { "type": ["integer", "null"] },
+              "status": { "type": "string", "enum": ["online", "offline"] },
+              "status_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "last_seen": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "statistics_report.v1": {
+      "$id": "statistics_report.v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "online", "offline", "online_rate", "distribution", "low_confidence"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "online": { "type": "integer", "minimum": 0 },
+        "offline": { "type": "integer", "minimum": 0 },
+        "online_rate": { "type": ["number", "null"] },
+        "distribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["day", "hour", "unknown"],
+          "properties": {
+            "day": { "type": "array", "items": { "type": "string" } },
+            "hour": { "type": "array", "items": { "type": "string" } },
+            "unknown": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "low_confidence": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "refresh_record.v1": {
+      "$id": "refresh_record.v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "added", "removed", "changed", "online_diff"],
+      "properties": {
+        "date": { "type": "string", "description": "记录日期 YYYY-MM-DD" },
+        "added": { "type": "array", "items": { "$ref": "#/definitions/change_item.v1" } },
+        "removed": { "type": "array", "items": { "$ref": "#/definitions/change_item.v1" } },
+        "changed": { "type": "array", "items": { "$ref": "#/definitions/change_item.v1" } },
+        "online_diff": { "type": "integer" }
+      }
+    },
+    "deletion_compare_result.v1": {
+      "$id": "deletion_compare_result.v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deleted", "newly_added", "deleted_count", "newly_added_count"],
+      "properties": {
+        "deleted": { "type": "array", "items": { "$ref": "#/definitions/change_item.v1" } },
+        "newly_added": { "type": "array", "items": { "$ref": "#/definitions/change_item.v1" } },
+        "deleted_count": { "type": "integer", "minimum": 0 },
+        "newly_added_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ocr_cleanup_result.v1": {
+      "$id": "ocr_cleanup_result.v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clean_text"],
+      "properties": {
+        "clean_text": { "type": "string", "description": "清洗后的文本" }
+      }
+    },
+    "change_item.v1": {
+      "$id": "change_item.v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "nickname"],
+      "properties": {
+        "uid": { "type": ["string", "null"] },
+        "nickname": { "type": ["string", "null"] },
+        "level": { "type": ["integer", "null"] },
+        "status": { "type": "string", "enum": ["online", "offline"] },
+        "last_seen": { "type": ["string", "null"] },
+        "fields_changed": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

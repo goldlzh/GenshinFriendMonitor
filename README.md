@@ -8,7 +8,7 @@
 
 ## 安装与启动
 
-- Windows 便携包：从 [GitHub Release](https://github.com/goldlzh/test_ocr_genshin/releases/latest) 下载 `GenshinFriendMonitor-windows-x64-v1.1.0.zip`，解压到可写目录，运行 `GenshinFriendMonitor.exe`，无需安装 Python。不要直接在压缩包中运行；游戏以管理员身份启动时，需右键以管理员身份运行扫描器。
+- Windows 便携包：从 [GitHub Release](https://github.com/goldlzh/GenshinFriendMonitor/releases/latest) 下载 `GenshinFriendMonitor-windows-x64-v1.1.0.zip`，解压到可写目录，运行 `GenshinFriendMonitor.exe`，无需安装 Python。也可从 [Gitee 发行版](https://gitee.com/DM233/test_ocr_genshin/releases/latest) 下载分段包，按发行说明合并后解压。不要直接在压缩包中运行；游戏以管理员身份启动时，需右键以管理员身份运行扫描器。
 - Windows 10 / 11，原神 PC 中文界面，建议窗口或无边框窗口模式。
 - 64 位 Python 3.10+；开发验证环境使用 Python 3.13。依赖清单见 [requirements.txt](requirements.txt)，已记录的依赖组合见 [requirements-local-lock.txt](requirements-local-lock.txt)。
 - 源码包不包含虚拟环境、个人配置、好友数据库、游戏字体或扫描截图。第一次使用需安装依赖。
@@ -165,4 +165,4 @@ PyInstaller 配置位于 [build.spec](build.spec)，可通过 [build.bat](build.
 - [开发检查要点](CODE_REVIEW.md)
 - [隐私与本地数据](PRIVACY.md)
 
-项目仓库：[GitHub](https://github.com/goldlzh/test_ocr_genshin)，[版本下载](https://github.com/goldlzh/test_ocr_genshin/releases)。上游项目：[Gitee](https://gitee.com/DM233/test_ocr_genshin)。
+项目仓库：[GitHub](https://github.com/goldlzh/GenshinFriendMonitor)，[版本下载](https://github.com/goldlzh/GenshinFriendMonitor/releases)。上游项目：[Gitee](https://gitee.com/DM233/test_ocr_genshin)，[Gitee 版本下载](https://gitee.com/DM233/test_ocr_genshin/releases)。

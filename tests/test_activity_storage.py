@@ -154,7 +154,7 @@ class ActivityStorageTests(unittest.TestCase):
         self.scan(seconds=240)
         self.db.configure_monitoring(None, at=presence.at(300))
         events = [r[0] for r in self.db._conn.execute('SELECT event_type FROM status_events ORDER BY id')]
-        self.assertEqual(['added', 'observed_online', 'scan_default_offline', 'observed_online',
+        self.assertEqual(['observed_friend', 'observed_online', 'scan_default_offline', 'observed_online',
                           'offline', 'online', 'scan_default_offline'], events)
         self.assertEqual(180, self.stats(fid, 600)['total_seconds'])
 

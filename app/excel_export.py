@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from app.config import CONFIG
 from app.logger import logger
-from app.status_events import STATUS_CHANGE_LABELS
+from app.status_events import STATUS_CHANGE_LABELS, is_status_change
 
 
 def _fmt_online_seconds(secs: Optional[int]) -> str:
@@ -91,7 +91,7 @@ def export_friends_to_excel(friends: List[dict], events: List[dict],
         cell.fill = header_fill
     for ev in events:
         etype = STATUS_CHANGE_LABELS.get(ev.get('event_type'))
-        if etype is None:
+        if not is_status_change(ev):
             continue
         ws2.append(([account_uid] if account_uid is not None else []) +
                    [ev.get("event_time"), ev.get("uid"), ev.get("nickname"), etype])

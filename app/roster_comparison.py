@@ -2,6 +2,8 @@
 from collections import Counter
 import re
 
+from app.status_events import has_event_identity
+
 
 def valid_uid_roster(rows):
     uids = [r.get('uid') for r in rows]
@@ -53,4 +55,10 @@ def compare_rosters(previous, current):
         result.update(basis='nickname', reason='仅比较昵称及人数，不推断身份或改名',
                       added=[{'nickname': n, 'count': count} for n, count in (b-a).items()],
                       removed=[{'nickname': n, 'count': count} for n, count in (a-b).items()])
+    # Retain unidentifiable differences for diagnostics, never as friend changes.
+    for kind in ('added', 'removed'):
+        unknown = [row for row in result[kind] if not has_event_identity(row)]
+        if unknown:
+            result['unidentified_' + kind] = unknown
+            result[kind] = [row for row in result[kind] if has_event_identity(row)]
     return result

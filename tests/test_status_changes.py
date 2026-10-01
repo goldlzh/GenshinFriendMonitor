@@ -66,7 +66,7 @@ class StatusChangeStorageTests(unittest.TestCase):
         (fid,) = self.scan([storage.record('123456789', name='好友')])
         self.scan([], 60)
         self.assertEqual([], self.transitions())
-        self.assertEqual(['removed', 'added'], [e['event_type'] for e in self.db.get_recent_events(changes_only=True)])
+        self.assertEqual(['removed'], [e['event_type'] for e in self.db.get_recent_events(changes_only=True)])
         self.assertEqual(60, self.db.get_friend(fid)['cumulative_online_seconds'])
         self.assertEqual(['10:00-10:01'], self.db.get_today_online_ranges(fid, now=presence.at(120)))
 
@@ -88,7 +88,7 @@ class StatusChangeStorageTests(unittest.TestCase):
 
     def test_filter_applies_before_limit_and_diagnostic_rows_remain_available(self):
         kinds = ['online', 'offline', 'added', 'removed'] + ['observed_online'] * 501
-        self.db._conn.executemany('INSERT INTO status_events(event_type,event_time) VALUES (?,?)',
+        self.db._conn.executemany("INSERT INTO status_events(nickname,event_type,event_time) VALUES ('好友',?,?)",
                                    [(kind, presence.T0) for kind in kinds])
         self.db._conn.commit()
         self.assertEqual(['removed', 'added', 'offline', 'online'],
@@ -115,6 +115,15 @@ class StatusChangeStorageTests(unittest.TestCase):
         self.assertEqual(['online', 'offline'], rounds)
         self.assertEqual(['offline'], self.transitions())
 
+    def test_blank_identity_filter_precedes_limit_and_keeps_named_uidless_changes(self):
+        self.db._conn.execute("INSERT INTO status_events(nickname,event_type,event_time) VALUES ('好友','removed',?)",
+                              (presence.T0,))
+        self.db._conn.executemany("INSERT INTO status_events(nickname,event_type,event_time) VALUES (?,'added',?)",
+                                  [(' \t\u3000', presence.T0)] * 501)
+        self.db._conn.commit()
+        visible = self.db.get_recent_events(limit=1, changes_only=True)
+        self.assertEqual([('好友', 'removed')], [(row['nickname'], row['event_type']) for row in visible])
+
     def test_uid_scan_start_is_also_a_new_observation_session(self):
         fid = self.db.add_friend('123456789', '好友', 60, None, 'offline', presence.T0)
         scanner = Scanner(self.db)
@@ -140,12 +149,40 @@ class StatusChangeUiTests(unittest.TestCase):
     def test_visible_records_include_only_four_change_types(self):
         kinds = ['online', 'offline', 'added', 'removed', 'observed_online', 'observed_offline',
                  'scan_default_offline', 'unknown', 'renamed', 'manual_import']
-        self.db._conn.executemany('INSERT INTO status_events(event_type,event_time) VALUES (?,?)',
+        self.db._conn.executemany("INSERT INTO status_events(nickname,event_type,event_time) VALUES ('好友',?,?)",
                                    [(kind, presence.T0) for kind in kinds])
         self.db._conn.commit()
         self.win._load_events_table()
         self.assertEqual(['消失/可能被删', '新增', '下线', '上线'],
                          [self.win.events_table.item(row, 3).text() for row in range(self.win.events_table.rowCount())])
+
+    def test_incomplete_historical_identity_is_explicit_without_rewriting_events(self):
+        records = [
+            ('123456789', '完整好友', 'added', presence.T0),
+            (None, '仅有昵称', 'removed', presence.T0),
+            ('234567890', '', 'online', presence.T0),
+            ('  ', '\t', 'added', presence.T0),
+            (None, None, 'removed', presence.T0),
+        ]
+        self.db._conn.executemany(
+            'INSERT INTO status_events(uid,nickname,event_type,event_time) VALUES (?,?,?,?)', records)
+        self.db._conn.commit()
+        original_events = self.db.export_events()
+        self.win._load_events_table()
+        table = self.win.events_table
+        self.assertEqual([
+            ('234567890', '昵称未识别', '上线'),
+            ('未记录 UID', '仅有昵称', '消失/可能被删'),
+            ('123456789', '完整好友', '新增'),
+        ], [tuple(table.item(row, col).text() for col in (1, 2, 3))
+            for row in range(table.rowCount())])
+        self.assertTrue(all(table.item(row, 0).text() == presence.T0 for row in range(table.rowCount())))
+        self.assertIn('不代表当前仍未录入', table.item(1, 1).toolTip())
+        self.assertIn('显示历史档案', table.item(0, 2).toolTip())
+        self.assertEqual('', table.item(0, 3).toolTip())
+        self.assertIn('无法据此确定真实的好友增减', table.item(1, 3).toolTip())
+        self.assertEqual('', table.item(2, 3).toolTip())
+        self.assertEqual(original_events, self.db.export_events())
 
     def test_missing_uid_notice_does_not_block_quick_scan_and_clears_after_enrollment(self):
         fid = self.db.add_friend(None, '好友', 60, None, 'offline', presence.T0)

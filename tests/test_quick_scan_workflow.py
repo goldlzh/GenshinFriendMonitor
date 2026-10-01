@@ -45,6 +45,13 @@ class QuickScanWorkflowTests(unittest.TestCase):
 
     def simulate(self, count, mutate=None):
         state = self.harness.simulation(count=count, move_rows=5)
+        original_drag = baseline.scroller.drag_client.side_effect
+        def drag(rect, start, end, **kwargs):
+            if start[0] > 1800 and end[1] == layout.TRACK_TOP:
+                state['offset'] = 0.
+                return True
+            return original_drag(rect, start, end, **kwargs)
+        baseline.scroller.drag_client.side_effect = drag
         raw_read = layout.read_page.side_effect
         state['read_offsets'] = []
         state['read_quick_flags'] = []
@@ -88,19 +95,19 @@ class QuickScanWorkflowTests(unittest.TestCase):
                 obs.entry = replace(obs.entry, level=59)
                 obs.avatar_image = np.zeros_like(obs.avatar_image)
         state = self.simulate(13, changed)
-        workflow, result = self.run_workflow(state)
-        workflow.read_uid.assert_not_called()
-        workflow.verify_visible.assert_not_called()
+        workflow, result = self.run_workflow(state, uid='100000012')
+        workflow.read_uid.assert_called_once()
+        self.assertEqual(13, workflow.read_uid.call_args.args[3])
         self.assertEqual(13, result.total)
         self.assertEqual(ids[3], self.db.find_by_uid('100000003')['id'])
         self.assertEqual(59, self.db.find_by_uid('100000003')['level'])
-        self.assertIsNone(self.db.find_by_nickname('好友012')['uid'])
+        self.assertEqual('100000012', self.db.find_by_nickname('好友012')['uid'])
         self.assertGreater(len(state['commands']), 0)
         self.assertTrue(all(event['movement']['correlation'] >= .67
                             for event in workflow.frames if event['movement']))
 
     def test_scanner_entry_routes_both_quick_modes_without_full_uid_workflow(self):
-        self.seed(6)
+        self.seed(7)
         state = self.simulate(7)
         def actions(frame, observations, mode):
             return ['online']*len(observations), [('申请加入', .99)]*len(observations)
@@ -117,7 +124,7 @@ class QuickScanWorkflowTests(unittest.TestCase):
                     self.assertTrue(result.complete, result.message)
                     self.assertEqual(7, result.total)
                     self.assertEqual('online' if online_only else 'scan', result.mode)
-        self.assertIsNone(self.db.find_by_nickname('好友006')['uid'])
+                    self.assertEqual('100000006', self.db.find_by_nickname('好友006')['uid'])
         uid.assert_not_called()
 
     def test_small_list_without_scrollbar_reuses_single_home_page_ocr(self):
@@ -129,8 +136,7 @@ class QuickScanWorkflowTests(unittest.TestCase):
         self.assertEqual(1, workflow.frame_count)
         workflow.read_uid.assert_not_called()
 
-    def test_one_new_uidless_friend_accrues_time_and_reuses_local_id_next_round(self):
-        self.seed(6)
+    def test_first_scan_uidless_friends_accrue_time_and_reuse_local_ids_next_round(self):
         self.db.configure_monitoring(0, at=baseline.T0)
         state = self.simulate(7)
         first, _ = self.run_workflow(state, stamp=baseline.T1)
@@ -168,9 +174,9 @@ class QuickScanWorkflowTests(unittest.TestCase):
         self.assertEqual(ids, {r['id'] for r in self.db.get_display_friends()})
         self.assertEqual(3, len(self.db.get_all_friends()))
         self.assertEqual('123456789', self.db.get_friend(old)['uid'])
-        self.assertIn('备注', result.message)
-        first.read_uid.assert_not_called()
-        second.read_uid.assert_not_called()
+        self.assertIn('UID未能确认', result.message)
+        self.assertEqual(2, first.read_uid.call_count)
+        self.assertEqual(2, second.read_uid.call_count)
 
     def test_unreadable_nickname_keeps_original_image_and_local_id(self):
         originals = []
@@ -189,9 +195,9 @@ class QuickScanWorkflowTests(unittest.TestCase):
         second, _ = self.run_workflow(state, stamp=baseline.T2)
         self.assertEqual(row['id'], self.db.get_display_friends()[0]['id'])
         self.assertEqual(1, len(self.db.get_all_friends()))
-        self.assertEqual('nickname_image', second.records[0]['match_basis'])
-        first.read_uid.assert_not_called()
-        second.read_uid.assert_not_called()
+        self.assertEqual('needs_remark', second.records[0]['match_basis'])
+        first.read_uid.assert_called_once()
+        second.read_uid.assert_called_once()
 
     def test_blank_nickname_is_unknown_with_screenshot_and_no_uid_guess(self):
         def blank(index, obs):
@@ -205,8 +211,8 @@ class QuickScanWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(self.db.get_nickname_image(row['id']))
         second, _ = self.run_workflow(state, stamp=baseline.T2)
         self.assertEqual(row['id'], self.db.get_display_friends()[0]['id'])
-        first.read_uid.assert_not_called()
-        second.read_uid.assert_not_called()
+        first.read_uid.assert_called_once()
+        second.read_uid.assert_called_once()
 
     def test_unique_signature_rename_reads_one_uid_then_continues_following_pages(self):
         ids = self.seed(13, signature_index=2)
@@ -240,7 +246,8 @@ class QuickScanWorkflowTests(unittest.TestCase):
         self.assertGreater(workflow.frame_count, 1)
         self.assertEqual('unknown', workflow.records[5]['entry'].status)
         self.assertIsNotNone(workflow.records[5]['identity_review_key'])
-        workflow.read_uid.assert_not_called()
+        workflow.read_uid.assert_called_once()
+        self.assertEqual(6, workflow.read_uid.call_args.args[3])
 
     def test_overlapping_friend_seen_offline_is_removed_from_online_selection(self):
         self.seed(8, with_baseline=True)
@@ -311,22 +318,23 @@ class QuickScanWorkflowTests(unittest.TestCase):
         workflow.read_uid.assert_not_called()
         self.assertEqual(previous, self.db.get_complete_roster())
 
-    def test_quick_identity_duplicate_target_is_unknown_for_both_observations(self):
+    def test_confirmed_uid_takes_precedence_over_conflicting_inferred_match(self):
         row = {'id': 1, 'uid': '111111111', 'nickname': '既有昵称', 'signature': '签名一'}
         state = self.simulate(2)
         frame = capture.capture_region(0,0,1920,1080)
         observations = layout.read_page(frame, quick=True).observations
         for obs, name, signature in zip(observations, ('既有昵称', '疑似改名'), ('签名二', '签名一')):
             obs.entry = replace(obs.entry, nickname=name, signature=signature, signature_confidence=.99)
-        # A name match and a separately checked rename cannot both own the same
-        # local row. Do not let traversal order decide which one gets its UID.
+        # The actual UID read owns the row; the inferred match must be checked.
         result = QuickIdentities([row], []).resolve(enumerate(observations), verified={1: '111111111'})
-        self.assertEqual(['unknown', 'unknown'], [r['entry'].status for r in result])
-        self.assertEqual([None, None], [r['uid'] for r in result])
-        self.assertTrue(all(r['identity_review_key'] for r in result))
+        self.assertEqual(['unknown', 'online'], [r['entry'].status for r in result])
+        self.assertEqual([None, '111111111'], [r['uid'] for r in result])
+        self.assertTrue(result[0]['uid_check_reason'])
+        self.assertIsNone(result[1]['identity_review_key'])
 
     def test_cross_page_duplicate_pair_is_reconsidered_before_atomic_commit(self):
-        old = self.db.add_friend('123456789', '重名', 60, '同签名', 'offline', baseline.T0)
+        old = self.seed(8, with_baseline=True)[0]
+        self.db.update_friend_manual(old, '100000000', '重名', 60, '同签名')
         def twins(index, obs):
             if index in (0, 7):
                 obs.entry = replace(obs.entry, nickname='重名', signature='同签名', signature_confidence=.99)
@@ -339,10 +347,10 @@ class QuickScanWorkflowTests(unittest.TestCase):
         ids = {r['id'] for r in reviews}
         second, _ = self.run_workflow(state, stamp=baseline.T2)
         self.assertEqual(ids, {r['id'] for r in self.db.get_display_friends() if r['identity_review_key']})
-        self.assertEqual(9, len(self.db.get_all_friends()))
+        self.assertEqual(10, len(self.db.get_all_friends()))
         self.assertGreater(first.frame_count, 1)
-        first.read_uid.assert_not_called()
-        second.read_uid.assert_not_called()
+        self.assertEqual(2, first.read_uid.call_count)
+        self.assertEqual(2, second.read_uid.call_count)
 
     def test_online_new_friends_remain_uidless_and_reuse_local_rows(self):
         def statuses(index, obs):
@@ -362,7 +370,7 @@ class QuickScanWorkflowTests(unittest.TestCase):
         first.read_uid.assert_not_called()
         second.read_uid.assert_not_called()
 
-    def test_failed_rename_is_not_retried_next_round_and_keeps_review_local_id(self):
+    def test_failed_rename_retries_next_round_and_keeps_review_local_id(self):
         self.seed(13, signature_index=2)
         def renamed(index, obs):
             if index == 2:
@@ -375,8 +383,7 @@ class QuickScanWorkflowTests(unittest.TestCase):
         first.read_uid.assert_called_once()
         pending = next(r for r in self.db.get_display_friends() if r['identity_review_key'])
         second, _ = self.run_workflow(state, uid=failure, stamp=baseline.T2)
-        second.read_uid.assert_not_called()
-        second.verify_visible.assert_not_called()
+        second.read_uid.assert_called_once()
         same = next(r for r in self.db.get_display_friends() if r['identity_review_key'])
         self.assertEqual(pending['id'], same['id'])
         self.assertEqual(pending['identity_review_key'], same['identity_review_key'])
@@ -407,7 +414,7 @@ class QuickScanWorkflowTests(unittest.TestCase):
         self.assertEqual(previous, self.db.get_complete_roster())
         workflow.read_uid.assert_not_called()
 
-    def test_uidless_signature_candidate_does_not_trigger_profile_or_inherit_history(self):
+    def test_uidless_signature_candidate_is_checked_without_inheriting_unproven_history(self):
         self.db.configure_monitoring(0, at=baseline.T0)
         old = self.db.add_friend(None, '未核验旧名', 60, '唯一完整签名', 'online', baseline.T0)
         def new_name(index, obs):
@@ -415,21 +422,20 @@ class QuickScanWorkflowTests(unittest.TestCase):
                                 signature_confidence=.99)
         state = self.simulate(1, new_name)
         workflow, _ = self.run_workflow(state, uid='999999999', stamp=baseline.T1)
-        workflow.read_uid.assert_not_called()
-        workflow.verify_visible.assert_not_called()
-        new = self.db.get_display_friends()[0]
+        workflow.read_uid.assert_called_once()
+        new = self.db.find_by_uid('999999999')
         previous = self.db.get_friend(old)
         self.assertIsNotNone(new)
         self.assertNotEqual(old, new['id'])
         self.assertIsNone(previous['uid'])
-        self.assertIsNone(new['uid'])
-        self.assertEqual('unknown', new['current_status'])
-        self.assertTrue(new['identity_review_key'])
+        self.assertEqual('999999999', new['uid'])
+        self.assertEqual('online', new['current_status'])
+        self.assertIsNone(new['identity_review_key'])
         self.assertIsNotNone(self.db.get_nickname_image(new['id']))
         self.assertEqual('未核验旧名', previous['nickname'])
         self.assertEqual(60, previous['cumulative_online_seconds'])
         self.assertEqual(0, new['cumulative_online_seconds'])
-        self.assertIsNone(new['first_online_at'])
+        self.assertEqual(baseline.T1, new['first_online_at'])
         self.assertEqual(2, len(self.db.get_all_friends()))
         second, _ = self.run_workflow(state, uid='999999999', stamp=baseline.T2)
         second.read_uid.assert_not_called()
@@ -486,8 +492,8 @@ class QuickScanWorkflowTests(unittest.TestCase):
         self.assertEqual(('123456789', 'offline', None, 0),
                          (original['uid'], original['current_status'], original['first_online_at'],
                           original['cumulative_online_seconds']))
-        first.read_uid.assert_not_called()
-        second.read_uid.assert_not_called()
+        first.read_uid.assert_called_once()
+        second.read_uid.assert_called_once()
 
 
 if __name__ == '__main__':

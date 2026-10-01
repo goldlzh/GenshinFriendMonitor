@@ -1,6 +1,6 @@
 """扫描入口与线程协调。
 
-默认快速监测按昵称对应，只为疑似改名单独核验UID；全量UID由手动入口触发。
+默认快速监测按昵称对应，同名、无法匹配或疑似改名时单独核验UID；全量UID由手动入口触发。
 行号仅用于单轮覆盖检查，本地档案保存统计，UID用于确认改名后的历史连续性。
 """
 from __future__ import annotations
@@ -601,7 +601,7 @@ class Scanner:
                 self._missing_counts.clear()
                 self._seen_ids_prev.update(self._seen_ids)
                 note += '；未识别好友总数，暂不判断消失'
-            self.db.add_session(now, len(self._seen_ids), self._online, self._offline)
+            self.db.add_session(now, len(self._seen_ids), self._online, self._offline, friend_ids=self._seen_ids)
         else:
             self._missing_counts.clear()
             if hit_bottom:
@@ -631,7 +631,7 @@ class Scanner:
         else:
             fid = self.db.add_friend(None, entry.nickname, entry.level, None,
                                      entry.status, now, entry.location, entry.last_seen)
-            self._say('登记新好友（UID 待补录）: %s' % entry.nickname)
+            self._say('录入扫描档案（UID 待补录）: %s' % entry.nickname)
         self._seen_ids.add(fid)
         self._seen_statuses[fid] = entry.status
         self._online = sum(status == 'online' for status in self._seen_statuses.values())

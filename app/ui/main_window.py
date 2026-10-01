@@ -45,7 +45,7 @@ from app.accounts import AccountStore
 from app.database import Database
 from app.logger import logger
 from app.scanner import ScanResult, Scanner
-from app.status_events import STATUS_CHANGE_LABELS
+from app.status_events import STATUS_CHANGE_LABELS, is_status_change
 from app.ui.region_selector import RegionSelector
 from app.ui.profile_import_dialog import ProfileImportDialog
 
@@ -277,7 +277,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.select_region_btn, 0, 4)
 
         self.start_btn = QPushButton("快速扫描")
-        self.start_btn.setToolTip("按昵称快速扫描；仅疑似改名时单独核验 UID，完成后继续本页")
+        self.start_btn.setToolTip("按昵称快速扫描；同名、无法匹配或疑似改名时单独核验 UID，再继续扫描")
         self.start_btn.clicked.connect(self._toggle_scan)
         grid.addWidget(self.start_btn, 0, 5)
 
@@ -1049,15 +1049,26 @@ class MainWindow(QMainWindow):
 
     def _load_events_table(self) -> None:
         events = [event for event in self.db.get_recent_events(limit=500, changes_only=True)
-                  if event.get('event_type') in _EVENT_TEXT]
+                  if is_status_change(event)]
         self._latest_event = events[0] if events else None
         self.events_table.setRowCount(len(events))
         for row, ev in enumerate(events):
             self.events_table.setItem(row, 0, self._item(ev.get("event_time") or ""))
-            self.events_table.setItem(row, 1, self._item(ev.get("uid") or ""))
-            self.events_table.setItem(row, 2, self._item(ev.get("nickname") or ""))
+            uid = (ev.get("uid") or "").strip()
+            nickname = (ev.get("nickname") or "").strip()
+            uid_item = self._item(uid or "未记录 UID")
+            nickname_item = self._item(nickname or "昵称未识别")
+            history_hint = "后来补录的信息不会自动回填历史事件。可在好友列表中勾选“显示历史档案”查看保留的档案。"
+            if not uid:
+                uid_item.setToolTip("这条记录生成时未记录 UID，不代表当前仍未录入。" + history_hint)
+            if not nickname:
+                nickname_item.setToolTip("这条记录生成时没有识别到昵称。" + history_hint)
+            self.events_table.setItem(row, 1, uid_item)
+            self.events_table.setItem(row, 2, nickname_item)
             text = _EVENT_TEXT.get(ev.get("event_type"), ev.get("event_type") or "")
             item = self._item(text)
+            if ev.get("event_type") in ("added", "removed") and not uid:
+                item.setToolTip("这条记录的身份信息不完整，识别或匹配变化也可能产生这类记录，无法据此确定真实的好友增减。")
             if ev.get("event_type") == "removed":
                 item.setForeground(QColor("#c0392b"))
             self.events_table.setItem(row, 3, item)
@@ -1106,8 +1117,8 @@ class MainWindow(QMainWindow):
     def _update_stats(self) -> None:
         self._update_presence_stats()
         events = self.db.get_recent_events(limit=100000)
-        # 变动次数只统计「好友总数变动」：新增(added) 与 消失(removed)
-        change = sum(1 for e in events if e.get("event_type") in ("added", "removed"))
+        # 只统计有身份的好友增减，不统计档案录入、UID 补全或匹配待确认。
+        change = sum(1 for e in events if e.get("event_type") in ("added", "removed") and is_status_change(e))
         self.lbl_events.setText(f"变动: {change} 次")
 
     def _item(self, text: str) -> QTableWidgetItem:

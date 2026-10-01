@@ -1,6 +1,6 @@
 {
   "product": "GenshinFriendMonitor",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "files": [
     {
       "path": ".gitignore",
@@ -44,8 +44,8 @@
     },
     {
       "path": "app/database.py",
-      "bytes": 90886,
-      "sha256": "42960c5f8ab3de7080f86935848af669628770310e7719f2a115a748f1cb59fe"
+      "bytes": 99588,
+      "sha256": "7ad3aa3c9719f60fa9d59da71a2569b54105363ae9149b7ba97bfc6110181312"
     },
     {
       "path": "app/evidence_store.py",
@@ -54,8 +54,8 @@
     },
     {
       "path": "app/excel_export.py",
-      "bytes": 4734,
-      "sha256": "9a98d221cf030bf201087048ba8358d1295c6f27b7cb959a8e7d4d0346a8028f"
+      "bytes": 4763,
+      "sha256": "29c9c63bed1436a298ae5fb8112fe30501c5d1d8b63906d51b7baa1a0aab9305"
     },
     {
       "path": "app/fast_layout.py",
@@ -81,6 +81,11 @@
       "path": "app/logger.py",
       "bytes": 2018,
       "sha256": "b102a7c4b6df4c4ec3bf94a67c82502fa58e11f857d737159ecf7aea64ae9284"
+    },
+    {
+      "path": "app/membership_events.py",
+      "bytes": 11903,
+      "sha256": "69f96ef1403e2df8f791aaaa20788d97698e1a6602440d92ac578f0a8ce2df33"
     },
     {
       "path": "app/mysql_export.py",
@@ -119,13 +124,13 @@
     },
     {
       "path": "app/quick_scan.py",
-      "bytes": 25833,
-      "sha256": "668d11d813537cfc5d445a800fe36f47d1bb01b9a4f702a05b3e338cca3b11d4"
+      "bytes": 31547,
+      "sha256": "42576da17c7c053fd6e99f552ed78f8d1bd451c9ce9c91041461793af6909f4b"
     },
     {
       "path": "app/roster_comparison.py",
-      "bytes": 3525,
-      "sha256": "aafddf291a78f1201c81b2cef1c196f7a41ae29dab894553f235c05ecdaf0f31"
+      "bytes": 3931,
+      "sha256": "c081db69e772fce9cf2a1512e44384e11b8af7813c0b8221260236d1e8427991"
     },
     {
       "path": "app/scan_retention.py",
@@ -134,13 +139,13 @@
     },
     {
       "path": "app/scan_workflow.py",
-      "bytes": 53294,
-      "sha256": "73fc429493340248168d465094d44efe6fe34cd7a82bd246ace647b415476944"
+      "bytes": 53575,
+      "sha256": "84edf3c7b0e98094b39e6972ca136e6f6b1158f9fc1a1dc22bedd85334fb6ea8"
     },
     {
       "path": "app/scanner.py",
-      "bytes": 36746,
-      "sha256": "91d3fa60dc5dbe688c0cfd73ba92d37f53d1755105eae3b6764b97525f7ddc71"
+      "bytes": 36797,
+      "sha256": "c4a36620a9fb13d2ccc3fa749f711d9529b99f162af81ee7362785b88a4e2970"
     },
     {
       "path": "app/scroller.py",
@@ -149,8 +154,8 @@
     },
     {
       "path": "app/status_events.py",
-      "bytes": 213,
-      "sha256": "0c3479a293a0b77252c3eac82864da9b434c43c122587dd9e58e8e47b3be78f8"
+      "bytes": 518,
+      "sha256": "aab5bcae3579f2a931b3eb419a64c6b3e0c2cf40685e8b30063628c10871f460"
     },
     {
       "path": "app/ui/__init__.py",
@@ -159,8 +164,8 @@
     },
     {
       "path": "app/ui/main_window.py",
-      "bytes": 70553,
-      "sha256": "439eefa5e65b70b04a2feb77cae201203450c574ae5d29f423fa31f0bbe42b6c"
+      "bytes": 71473,
+      "sha256": "cb9d41f66d9fd992a768b362171fc28423795a801be0042c7bf52e9d086ae410"
     },
     {
       "path": "app/ui/profile_import_dialog.py",
@@ -175,7 +180,7 @@
     {
       "path": "app/version.py",
       "bytes": 169,
-      "sha256": "f81cc6156e0250de330a5487ccc93e369270dbad20e8a75d156ad02e970a3d04"
+      "sha256": "7643a6e558275e5e689618b61e4e95463487ae2e9df06f19d0622d412bec3641"
     },
     {
       "path": "app/window.py",
@@ -194,8 +199,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 1471,
-      "sha256": "7a01a17abd679d6e24f5a3dc8bb57b3eda5640ec355a1f95295caa6e0224bae1"
+      "bytes": 2794,
+      "sha256": "4daf796cc3df07daf32b60da2dea886c5e111d9071be4961a5d0641368a4db86"
     },
     {
       "path": "CODE_REVIEW.md",
@@ -209,8 +214,8 @@
     },
     {
       "path": "FEATURE_STATUS.md",
-      "bytes": 4690,
-      "sha256": "2b6454d4a04005e63c4af057a44d84af59398aa9529a589355d8b3be43c6de45"
+      "bytes": 4884,
+      "sha256": "61ba56c84e36e550422d44a3a2557258d7fdf461a996d077c497ac5445fbc89f"
     },
     {
       "path": "FIXES.md",
@@ -279,8 +284,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 16309,
-      "sha256": "3153e05f3ba9dfbd5ae8b2abb3abf9588b96c843ef084f46542a8b09521f5b8b"
+      "bytes": 18147,
+      "sha256": "e9fec22ec93cf05567839b29ad477fe102f7c8043f17e9595e2366c26a1a1aa5"
     },
     {
       "path": "requirements-local-lock.txt",
@@ -299,8 +304,8 @@
     },
     {
       "path": "SCAN_WORKFLOW.md",
-      "bytes": 8614,
-      "sha256": "a46b6877974a61526d9eb8b239f31e15f59231eb803d5fd7b12f6b3f51e5869b"
+      "bytes": 9140,
+      "sha256": "31ba3f8e0dc94a41e636b4f23ee725ce2a677f0fb9ef9c5c6eeb3a16fe6279c6"
     },
     {
       "path": "scripts/crop_profile_archive.py",
@@ -379,8 +384,8 @@
     },
     {
       "path": "tests/test_account_exports.py",
-      "bytes": 7274,
-      "sha256": "53478012a85e2c8f92c4d89a290b68a00c3ce4f3ef292ad0ed203468410bb58a"
+      "bytes": 7426,
+      "sha256": "765f067115a70359ecf35119697c29c491d08ec01613376b38cd8a198abc34a7"
     },
     {
       "path": "tests/test_account_identity_workflow.py",
@@ -409,13 +414,13 @@
     },
     {
       "path": "tests/test_activity_storage.py",
-      "bytes": 11009,
-      "sha256": "bcf74e9073e5ad891301544218a39a165b3f161eb23651762da3ad9df31fa9d6"
+      "bytes": 11019,
+      "sha256": "e52f28ec90eef32976e7f5f0f4442d6c986568c7c546a31c13e8b051793f5436"
     },
     {
       "path": "tests/test_display_and_window_safety.py",
-      "bytes": 7894,
-      "sha256": "27a23d56bea0f363249c8c086d4339285c3d60ff282e929a90b520677572aed8"
+      "bytes": 7916,
+      "sha256": "38d6be048f23a4c041ba5a42a717c1157166fe07591090bfd1bfb4ec3515d544"
     },
     {
       "path": "tests/test_duplicate_scroll.py",
@@ -436,6 +441,11 @@
       "path": "tests/test_manual_nickname_review.py",
       "bytes": 6572,
       "sha256": "b8be2af340e273fc01bd06db78907f21641231709e346a4e038c4ab45b2fc30c"
+    },
+    {
+      "path": "tests/test_membership_event_repair.py",
+      "bytes": 7369,
+      "sha256": "2d2b793d6ed82f3ced42cf5174ece8211169e80b1ee3bc12db603192499c9080"
     },
     {
       "path": "tests/test_new_friend_tail.py",
@@ -520,7 +530,7 @@
     {
       "path": "tests/test_qianxing_storage.py",
       "bytes": 11665,
-      "sha256": "ec242f0b5300366510e0e9e59947828d6141a0132250b7c0a470f4bc990e96b6"
+      "sha256": "ea591e301fbdc571a5274f9c4e61a3904c4b76ebb1b8f11ea613b96cb1096a6e"
     },
     {
       "path": "tests/test_qianxing_tag_regions.py",
@@ -559,8 +569,8 @@
     },
     {
       "path": "tests/test_quick_scan_workflow.py",
-      "bytes": 28208,
-      "sha256": "821a2efadd653de0d369491f10902a863126dabb6cd5ee4d8ded2ae3f3c15fa7"
+      "bytes": 28669,
+      "sha256": "14c7e4a4995d5a7472ce74341c97c5dd52fb53b6c6eb3aed3730ec867ad15818"
     },
     {
       "path": "tests/test_quick_single_read.py",
@@ -579,8 +589,8 @@
     },
     {
       "path": "tests/test_roster_membership.py",
-      "bytes": 11435,
-      "sha256": "5409d6962c160fb959f4bbfc0f4d70fe5e62ccb2b82777b0a5b9ee5d6a93cc65"
+      "bytes": 18644,
+      "sha256": "e8dc6f2405188d560c78d9a317025d556d12b1df6cb08dcfdc333f2109a1d773"
     },
     {
       "path": "tests/test_roster_ocr_conflicts.py",
@@ -613,6 +623,11 @@
       "sha256": "bd4143c2b019bd643d17b412da7a7944b9389b76b5c12bade8465544aef35607"
     },
     {
+      "path": "tests/test_selective_uid.py",
+      "bytes": 9644,
+      "sha256": "88bed5e3bdda2d4305ced6b3fa7d8aa8d025d0391341ccdaafbbcde94fe8188f"
+    },
+    {
       "path": "tests/test_signature_fields.py",
       "bytes": 8124,
       "sha256": "a9db15dfc86350831eb98dbf6b0cb7e2aa24e5ea30c20a1bc76d1c13b829c455"
@@ -629,8 +644,8 @@
     },
     {
       "path": "tests/test_status_changes.py",
-      "bytes": 11732,
-      "sha256": "40b6e9c5e41f6ad1fbc93a78756a12a70447e8e5671e8b56fabc489eca819d88"
+      "bytes": 13961,
+      "sha256": "f5511e6110a30ec076968858da61b32f072c509ef0408ec5e6bf65f81b2de9d3"
     },
     {
       "path": "tests/test_uid_field_recovery.py",
@@ -646,6 +661,11 @@
       "path": "tests/test_uid_readiness.py",
       "bytes": 8143,
       "sha256": "f56961e14f9b302c8e36a057a3972c2671bd7779f10d401af6c80001e8280416"
+    },
+    {
+      "path": "tests/test_unresolved_membership.py",
+      "bytes": 8037,
+      "sha256": "15e2e28ba760825e97a7213800c391e7b8efb6c1b620b360ff79ffe94d14bc26"
     }
   ]
 }

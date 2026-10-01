@@ -46,11 +46,12 @@ class RosterMembershipStorageTests(unittest.TestCase):
                               storage.record(fid=new, name='新增')], 120)
         self.assertEqual(([], []), (again['added'], again['removed']))
         self.assertEqual(1, len(self.events('removed')))
-        self.assertEqual(3, len(self.events('added')))
+        self.assertEqual(1, len(self.events('added')))
 
     def test_first_uidless_scan_is_baseline_and_next_scan_can_report_uidless_removal(self):
         (kept, lost), first = self.scan([storage.record(name='甲'), storage.record(name='乙')])
         self.assertEqual('skipped', first['basis'])
+        self.assertEqual([], self.events('added'))
         self.assertEqual([], self.events('removed'))
         (_, new), second = self.scan([storage.record(fid=kept, name='甲'), storage.record(name='丙')], 60)
         self.assertEqual([dict(id=lost, uid=None, nickname='乙')], second['removed'])
@@ -93,7 +94,7 @@ class RosterMembershipStorageTests(unittest.TestCase):
         self.scan([storage.record(fid=kept, name='甲')], 60)
         _, diff = self.scan([storage.record(fid=kept, name='甲'), storage.record(fid=lost, name='乙')], 120)
         self.assertEqual([lost], [row['id'] for row in diff['added']])
-        self.assertEqual(['甲', '乙', '乙'], [row['nickname'] for row in self.events('added')])
+        self.assertEqual(['乙'], [row['nickname'] for row in self.events('added')])
         self.assertEqual(2, len(self.db.get_all_friends()))
 
     def test_online_scan_does_not_remove_or_advance_baseline_or_double_count_added(self):
@@ -105,7 +106,8 @@ class RosterMembershipStorageTests(unittest.TestCase):
         self.assertEqual([], self.events('removed'))
         _, diff = self.scan([storage.record(fid=kept, name='甲'), storage.record(fid=new, name='丙')], 120)
         self.assertEqual([lost], [r['id'] for r in diff['removed']])
-        self.assertEqual(3, len(self.events('added')))
+        self.assertEqual([new], [r['id'] for r in diff['added']])
+        self.assertEqual(1, len(self.events('added')))
 
     def test_late_commit_failure_rolls_back_events_comparison_and_baseline(self):
         self.scan([storage.record(name='甲')])
@@ -137,9 +139,114 @@ class RosterMembershipStorageTests(unittest.TestCase):
         self.scan([storage.record(fid=kept, name='甲')], 60)
         records = [storage.record(fid=kept, name='甲'), storage.record(fid=lost, name='乙')]
         self.db.apply_online_scan(records, presence.at(120), 1., 'online return', identity_complete=False)
-        self.assertEqual(3, len(self.events('added')))
+        self.assertEqual(1, len(self.events('added')))
         self.scan(records, 180)
-        self.assertEqual(3, len(self.events('added')))
+        self.assertEqual(1, len(self.events('added')))
+
+    def test_anonymous_cards_never_become_membership_events(self):
+        (known,), _ = self.scan([storage.record('123456789', name='留下')])
+        (_, anonymous), diff = self.scan([storage.record('123456789', fid=known, name='留下'),
+                                          storage.record(name='', status='unknown')], 60)
+        self.assertEqual([], diff['added'])
+        self.assertEqual([anonymous], [r['id'] for r in diff['unidentified_added']])
+        _, diff = self.scan([storage.record('123456789', fid=known, name='留下')], 120)
+        self.assertEqual([], diff['removed'])
+        self.assertEqual([anonymous], [r['id'] for r in diff['unidentified_removed']])
+        self.db.mark_removed(anonymous, presence.at(180))
+        self.assertEqual([], self.events('added') + self.events('removed'))
+        self.assertIsNotNone(self.db.get_friend(anonymous))
+
+    def test_completing_anonymous_card_is_identity_enrollment_not_addition(self):
+        (pending,), _ = self.scan([storage.record(name='', status='unknown')])
+        (same,), diff = self.scan([storage.record('123456789', fid=pending, name='识别完成')], 60)
+        self.assertEqual(pending, same)
+        self.assertEqual(([], []), (diff['added'], diff['removed']))
+        self.assertEqual([pending], [r['id'] for r in diff['uid_completed']])
+        self.assertEqual(1, len(self.events('uid_completed')))
+        self.assertEqual([], self.events('added'))
+        self.scan([storage.record('123456789', fid=pending, name='识别完成')], 120)
+        self.assertEqual(1, len(self.events('uid_completed')))
+
+    def test_reidentified_historical_archive_does_not_pair_with_anonymous_card(self):
+        owner = self.db.add_friend('123456789', '旧档案', 60, None, 'offline', presence.T0)
+        (pending,), _ = self.scan([storage.record(name='', status='unknown')], 60)
+        (same,), diff = self.scan([storage.record('123456789', name='旧档案')], 120)
+        self.assertEqual(owner, same)
+        self.assertEqual(([], []), (diff['added'], diff['removed']))
+        self.assertEqual([owner], [r['id'] for r in diff['reidentified']])
+        self.assertEqual([pending], [r['id'] for r in diff['unidentified_removed']])
+        self.assertEqual([], self.events('added') + self.events('removed'))
+        self.assertIsNotNone(self.db.get_friend(pending))
+
+    def test_new_identity_replacing_anonymous_card_waits_for_confirmation(self):
+        self.scan([storage.record(name='', status='unknown')])
+        _, diff = self.scan([storage.record('123456789', name='现在能识别')], 60)
+        self.assertEqual(([], []), (diff['added'], diff['removed']))
+        self.assertEqual(['123456789'], [r['uid'] for r in diff['unconfirmed_added']])
+        self.assertEqual([], self.events('added') + self.events('removed'))
+
+    def test_uid_only_friend_can_be_added_and_removed(self):
+        self.scan([])
+        (fid,), diff = self.scan([storage.record('123456789', name='')], 60)
+        self.assertEqual(['123456789'], [r['uid'] for r in diff['added']])
+        _, diff = self.scan([], 120)
+        self.assertEqual(['123456789'], [r['uid'] for r in diff['removed']])
+        self.assertEqual([fid, fid], [r['friend_id'] for r in self.events('added') + self.events('removed')])
+
+    def test_existing_archive_absent_from_complete_uid_roster_can_really_join(self):
+        archived = self.db.add_friend('123456789', '旧档案', 60, None, 'offline', presence.T0)
+        self.scan([storage.record('223456789', name='当前好友')], 60)
+        _, diff = self.scan([storage.record('123456789', fid=archived, name='旧档案'),
+                             storage.record('223456789', name='当前好友')], 120)
+        self.assertEqual(['123456789'], [r['uid'] for r in diff['added']])
+        self.assertEqual(1, len(self.events('added')))
+
+    def test_online_enrollment_and_old_archive_reidentification_do_not_count_added(self):
+        owner = self.db.add_friend('123456789', '旧档案', 60, None, 'offline', presence.T0)
+        (pending,), _ = self.scan([storage.record(name='待补全')], 60)
+        self.db.apply_online_scan([storage.record('123456789', fid=pending, name='待补全')],
+                                   presence.at(120), 1., 'online')
+        self.assertEqual([], self.events('added'))
+        self.assertEqual([owner], [r['friend_id'] for r in self.events('uid_completed')])
+
+    def test_manual_uid_completion_is_not_membership_addition(self):
+        (pending,), _ = self.scan([storage.record(name='待补全')])
+        self.db.update_friend_manual(pending, '123456789', '待补全', 60, None)
+        self.assertEqual([], self.events('added'))
+        self.assertEqual([pending], [r['friend_id'] for r in self.events('uid_completed')])
+
+    def test_later_uid_confirmation_retracts_alias_addition_and_matching_disappearance(self):
+        (owner,), _ = self.scan([storage.record('123456789', name='旧名')])
+        (pending,), diff = self.scan([storage.record(name='新名')], 60)
+        self.assertEqual(1, len(diff['added']))
+        self.assertEqual(1, len(diff['removed']))
+        (same,), diff = self.scan([storage.record('123456789', fid=pending, name='新名')], 120)
+        self.assertEqual(owner, same)
+        self.assertEqual(([], []), (diff['added'], diff['removed']))
+        self.assertEqual([], self.events('added') + self.events('removed'))
+        corrected = self.db.get_roster_comparisons()[1]
+        self.assertEqual(([], []), (corrected['added'], corrected['removed']))
+        self.assertEqual(2, len(corrected['identity_resolved']))
+        self.assertEqual(['added', 'removed'], [e['original_event_type'] for e in self.events('identity_resolved')])
+
+    def test_uid_merge_keeps_real_return_after_an_earlier_confirmed_disappearance(self):
+        (owner,), _ = self.scan([storage.record('123456789', name='旧名')])
+        self.scan([], 60)
+        (pending,), _ = self.scan([storage.record(name='新名')], 120)
+        self.scan([storage.record('123456789', fid=pending, name='新名')], 180)
+        self.assertEqual([owner], [r['friend_id'] for r in self.events('added')])
+        self.assertEqual([owner], [r['friend_id'] for r in self.events('removed')])
+
+    def test_legacy_complete_scan_distinguishes_initial_archives_and_new_friends(self):
+        first = self.db.add_friend(None, '原好友', 60, None, 'offline', presence.T0)
+        self.db.add_session(presence.T0, 1, 0, 1, friend_ids=[first])
+        self.assertEqual([], self.events('added'))
+        new = self.db.add_friend(None, '新好友', 60, None, 'offline', presence.at(65))
+        self.db.add_session(presence.at(60), 2, 0, 2, friend_ids=[first, new])
+        self.assertEqual([new], [r['friend_id'] for r in self.events('added')])
+        self.db.update_friend_manual(new, '123456789', '新好友', 60, None)
+        self.db.add_session(presence.at(120), 2, 0, 2, friend_ids=[first, new])
+        self.assertEqual([new], [r['friend_id'] for r in self.events('added')])
 
 
 class QuickMembershipWorkflowTests(unittest.TestCase):
@@ -149,18 +256,19 @@ class QuickMembershipWorkflowTests(unittest.TestCase):
         self.addCleanup(self.harness.doCleanups)
         self.db = self.harness.db
 
-    def test_equal_count_replacement_is_reported_without_opening_any_profile(self):
+    def test_equal_count_replacement_is_confirmed_by_only_the_unmatched_profile(self):
         ids = self.harness.seed(6, with_baseline=True)
         def replaced(index, obs):
             if index == 2:
                 obs.entry = replace(obs.entry, nickname='新朋友')
         state = self.harness.simulate(6, replaced)
-        workflow, result = self.harness.run_workflow(state)
-        workflow.read_uid.assert_not_called()
+        workflow, result = self.harness.run_workflow(state, uid='223456789')
+        workflow.read_uid.assert_called_once()
+        self.assertEqual(3, workflow.read_uid.call_args.args[3])
         self.assertEqual(['100000002'], [r['uid'] for r in result.comparison['removed']])
         self.assertEqual(['新朋友'], [r['nickname'] for r in result.comparison['added']])
         self.assertIn('新增1位，消失/可能被删1位', result.message)
-        self.assertIsNone(self.db.find_by_nickname('新朋友')['uid'])
+        self.assertEqual('223456789', self.db.find_by_nickname('新朋友')['uid'])
         self.assertIsNotNone(self.db.get_friend(ids[2]))
         _, again = self.harness.run_workflow(state, stamp=baseline.T2)
         self.assertEqual(([], []), (again.comparison['added'], again.comparison['removed']))

@@ -22,6 +22,7 @@ from app.config import CONFIG
 from app.database import now_str
 from app.fast_scan import FastScan, RosterChanged, ScanIncomplete, _decode, _png
 from app.logger import logger
+from app.membership_events import comparison_identity_note
 from app.roster_comparison import compare_rosters, valid_uid_roster
 from app.scan_retention import retained_scan_round
 
@@ -825,7 +826,9 @@ class ScanWorkflow:
                         local_rows = self.scanner.db.get_all_friends()
                         local_by_id = {row['id']: row for row in local_rows}
                         local_matches = QuickIdentities(local_rows,
-                            self.scanner.db.get_visual_profiles()).resolve(list(enumerate(uid_items)))
+                            self.scanner.db.get_visual_profiles(),
+                            matching_ids=self.scanner.db.get_identity_candidate_ids()).resolve(
+                                list(enumerate(uid_items)), verified=uid_scan.uids)
                         for i, record in enumerate(records):
                             record['uid'] = uid_scan.uids.get(i)
                             match = local_matches[i]
@@ -893,6 +896,8 @@ class ScanWorkflow:
             else:
                 note += '；与上次完整名单比较：新增 %d，减少 %d，改名 %d' % tuple(
                     sum(v.get('count', 1) for v in comparison.get(k, [])) for k in ('added', 'removed', 'renamed'))
+        if complete:
+            note += comparison_identity_note(comparison)
         pending = sum(bool(r.get('nickname_pending')) for r in rows)
         if complete and pending:
             note += '；%d 个昵称显示截图，待人工核查（双击昵称编辑）' % pending

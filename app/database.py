@@ -22,8 +22,10 @@ from typing import Any, Dict, List, Optional
 
 from app.config import CONFIG
 from app.logger import logger
-from app.roster_comparison import compare_rosters
-from app.status_events import STATUS_CHANGE_LABELS
+from app.roster_comparison import compare_rosters, valid_uid_roster
+from app.status_events import STATUS_CHANGE_LABELS, has_event_identity
+from app.membership_events import (classify_additions, migrate_membership_events, resolve_archive_membership,
+                                   pending_removals, save_pending_removals, defer_unresolved_removals)
 from app.evidence_store import EvidenceStoreMixin, ensure_evidence_schema, evidence_schema_needs_migration
 
 _UNSET = object()
@@ -191,6 +193,9 @@ class Database(EvidenceStoreMixin):
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.create_function('has_event_identity', 2,
+                             lambda uid, nickname: has_event_identity(dict(uid=uid, nickname=nickname)),
+                             deterministic=True)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
@@ -213,9 +218,14 @@ class Database(EvidenceStoreMixin):
                 needs_migration |= 'friends' in tables and 'online_scan_roster' not in tables
                 needs_migration |= 'friends' in tables and 'qianxing_activity_sessions' not in tables
                 needs_migration |= 'friends' in tables and 'presence_range_breaks' not in tables
+                event_cols = {r[1] for r in self._conn.execute('PRAGMA table_info(status_events)')}
+                needs_migration |= bool(event_cols) and 'friend_id' not in event_cols
                 visual_cols = {r[1] for r in self._conn.execute('PRAGMA table_info(visual_profiles)')}
                 needs_migration |= bool(visual_cols) and 'interface_mode' not in visual_cols
                 needs_migration |= evidence_schema_needs_migration(self._conn)
+                if 'uid' in cols:
+                    needs_migration |= self._conn.execute("""SELECT 1 FROM friends
+                        WHERE uid IS NOT NULL AND uid<>'' GROUP BY uid HAVING COUNT(*)>1 LIMIT 1""").fetchone() is not None
                 if needs_migration and self._path != ':memory:':
                     backup_path = Path(str(self._path) + '.backup-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
                     backup = sqlite3.connect(str(backup_path))
@@ -297,7 +307,13 @@ class Database(EvidenceStoreMixin):
             (SELECT MIN(id) FROM nickname_aliases GROUP BY friend_id, alias)""")
         self._conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_pair ON nickname_aliases(friend_id, alias)')
         ensure_evidence_schema(self._conn)
-        self._conn.execute('PRAGMA user_version=8')
+        migrate_membership_events(self._conn)
+        for group in self._conn.execute("""SELECT uid FROM friends WHERE uid IS NOT NULL AND uid<>''
+                GROUP BY uid HAVING COUNT(*)>1""").fetchall():
+            ids = [r[0] for r in self._conn.execute('SELECT id FROM friends WHERE uid=? ORDER BY id', (group[0],))]
+            for other_id in ids[1:]:
+                self._merge_friend_locked(ids[0], other_id)
+        self._conn.execute('PRAGMA user_version=9')
 
     @property
     def monitoring_interval_seconds(self):
@@ -654,12 +670,23 @@ class Database(EvidenceStoreMixin):
     # ------------------------------------------------------------------
     # 写入
     # ------------------------------------------------------------------
+    def _record_friend_event_locked(self, fid, kind, now, *, uid=None, nickname=None):
+        row = self.get_friend(fid)
+        if row is None:
+            return
+        identity = dict(uid=uid if uid is not None else row['uid'],
+                        nickname=nickname if nickname is not None else row['nickname'])
+        if kind in STATUS_CHANGE_LABELS and not has_event_identity(identity):
+            return
+        self._conn.execute('''INSERT INTO status_events(friend_id,uid,nickname,event_type,event_time)
+            VALUES (?,?,?,?,?)''', (fid, identity['uid'], identity['nickname'], kind, now))
+
     def add_friend(self, uid: Optional[str], nickname: str, level: Optional[int],
                    signature: Optional[str], status: str, now: str,
                    location: Optional[str] = None, last_seen: Optional[str] = None,
                    *, commit: bool = True, qianxing_level: Optional[int] = None,
                    tags: Optional[str] = None, qianxing_activity=None) -> int:
-        """新增好友，返回 id。"""
+        """Create a local archive, not evidence that a game friend was added."""
         with self._lock:
             cur = self._conn.execute(
                 """INSERT INTO friends
@@ -674,10 +701,7 @@ class Database(EvidenceStoreMixin):
             self._conn.execute('UPDATE friends SET last_observed_status=? WHERE id=?',
                                (status if status in ('online', 'offline') else None, cur.lastrowid))
             self._update_activity_locked(cur.lastrowid, qianxing_activity if status == 'online' else None, now)
-            self._conn.execute(
-                "INSERT INTO status_events (uid, nickname, event_type, event_time) VALUES (?, ?, 'added', ?)",
-                (uid, nickname, now),
-            )
+            self._record_friend_event_locked(cur.lastrowid, 'observed_friend', now)
             if status == "online":
                 self._conn.execute(
                     "INSERT INTO status_events (uid, nickname, event_type, event_time) VALUES (?, ?, 'observed_online', ?)",
@@ -741,8 +765,7 @@ class Database(EvidenceStoreMixin):
             elif status == 'offline' and observed_before == 'online':
                 event = 'offline'
             if event:
-                self._conn.execute('INSERT INTO status_events(uid,nickname,event_type,event_time) VALUES (?,?,?,?)',
-                                   (row['uid'], nickname or row['nickname'], event, now))
+                self._record_friend_event_locked(fid, event, now, nickname=nickname or row['nickname'])
             if commit:
                 self._conn.commit()
 
@@ -758,11 +781,24 @@ class Database(EvidenceStoreMixin):
         other = dict(self._conn.execute('SELECT * FROM friends WHERE id=?', (other_id,)).fetchone())
         if keep['uid'] and other['uid'] and keep['uid'] != other['uid']:
             raise ValueError('不同 UID 的好友不能合并')
+        resolve_archive_membership(self._conn, keep, other)
+        pending = pending_removals(self._conn)
+        if pending:
+            for row in pending:
+                if row['id'] == other_id:
+                    row.update(id=keep_id, uid=keep['uid'] or other['uid'])
+                if row.get('identity_candidate_ids'):
+                    row['identity_candidate_ids'] = sorted({keep_id if fid == other_id else fid
+                                                           for fid in row['identity_candidate_ids']})
+            save_pending_removals(self._conn, list({row['id']: row for row in pending}.values()))
+        self._conn.execute('UPDATE status_events SET friend_id=? WHERE friend_id=?', (keep_id, other_id))
         overlap = _overlap_seconds(self._observed_intervals(keep), self._observed_intervals(other))
         a, b = keep['cumulative_online_seconds'] or 0, other['cumulative_online_seconds'] or 0
         cumulative = max(a, b, a + b - overlap)
-        latest = max((keep, other), key=lambda r: r['last_scan_at'] or '')
-        by_recency = sorted((keep, other), key=lambda r: r['last_scan_at'] or '', reverse=True)
+        by_recency = sorted((keep, other), key=lambda r: (r['last_scan_at'] or r['first_seen_at'] or '', r['id']), reverse=True)
+        latest = by_recency[0]
+        named = next((r for r in by_recency if r['nickname'] and not r['nickname_pending']), latest)
+        signature_row = next((r for r in by_recency if not r['signature_pending'] and r['signature'] is not None), latest)
         qianxing_level = next((r['qianxing_level'] for r in by_recency if r['qianxing_level'] is not None), None)
         tags = next((r['tags'] for r in by_recency if r['tags'] is not None), None)
         total = latest['total_online_seconds'] or 0
@@ -778,11 +814,17 @@ class Database(EvidenceStoreMixin):
         self._conn.execute("""UPDATE friends SET first_seen_at=?, last_scan_at=?, first_online_at=?,
             current_status=?, total_online_seconds=?, cumulative_online_seconds=?,
             status_updated_at=?, level=?, signature=?, location=?, last_seen=?, qianxing_level=?, tags=?,
-            last_observed_status=?,signature_pending=? WHERE id=?""",
+            last_observed_status=?,signature_pending=?,nickname=?,nickname_pending=?,uid=?,
+            identity_review_key=NULL,identity_review_reason=NULL WHERE id=?""",
             (first_seen, latest['last_scan_at'], first_online, latest['current_status'], total,
              cumulative, latest['status_updated_at'], latest['level'] or keep['level'] or other['level'],
-             keep['signature'] or other['signature'], latest['location'], latest['last_seen'],
-             qianxing_level, tags, latest['last_observed_status'], latest['signature_pending'], keep_id))
+             signature_row['signature'], latest['location'], latest['last_seen'],
+             qianxing_level, tags, latest['last_observed_status'], signature_row['signature_pending'],
+             named['nickname'], named['nickname_pending'], keep['uid'] or other['uid'], keep_id))
+        for source in (keep, other):
+            if source['nickname'] and source['nickname'] != named['nickname']:
+                self._conn.execute('INSERT OR IGNORE INTO nickname_aliases(friend_id,alias,created_at) VALUES (?,?,?)',
+                                   (keep_id, source['nickname'], latest['last_scan_at'] or latest['first_seen_at']))
         # Keep both confirmed histories; projection unions overlaps so merging
         # aliases never counts the same named activity twice.
         for source in (keep, other):
@@ -812,14 +854,20 @@ class Database(EvidenceStoreMixin):
             for row in rows:
                 if row['id'] == other_id:
                     row.update(id=keep_id, uid=keep['uid'] or other['uid'],
-                               identity_review_key=None, identity_review_reason=None)
+                               identity_review_key=None, identity_review_reason=None, identity_candidate_ids=[])
+                elif row.get('identity_candidate_ids'):
+                    row['identity_candidate_ids'] = sorted({keep_id if fid == other_id else fid
+                                                           for fid in row['identity_candidate_ids']})
             self._conn.execute('UPDATE roster_baseline SET rows_json=? WHERE id=1',
                                (json.dumps(rows, ensure_ascii=False),))
         self._conn.execute('INSERT OR IGNORE INTO online_scan_roster SELECT ? FROM online_scan_roster WHERE friend_id=?',
                            (keep_id, other_id))
         self._conn.execute('DELETE FROM online_scan_roster WHERE friend_id=?', (other_id,))
-        self._conn.execute('INSERT OR IGNORE INTO visual_profiles SELECT ?,name_image,avatar_image,observed_at,interface_mode FROM visual_profiles WHERE friend_id=?',
-                           (keep_id, other_id))
+        self._conn.execute('''INSERT INTO visual_profiles
+            SELECT ?,name_image,avatar_image,observed_at,interface_mode FROM visual_profiles WHERE friend_id=?
+            ON CONFLICT(friend_id) DO UPDATE SET name_image=excluded.name_image,avatar_image=excluded.avatar_image,
+                observed_at=excluded.observed_at,interface_mode=excluded.interface_mode
+            WHERE excluded.observed_at>visual_profiles.observed_at''', (keep_id, other_id))
         self._conn.execute('DELETE FROM visual_profiles WHERE friend_id=?', (other_id,))
         self._merge_evidence_locked(keep_id, other_id, keep['uid'] or other['uid'])
         self._conn.execute('DELETE FROM friends WHERE id=?', (other_id,))
@@ -846,6 +894,8 @@ class Database(EvidenceStoreMixin):
             old_name = keep['nickname']
             self._conn.execute('UPDATE friends SET uid=?, nickname=? WHERE id=?', (uid, nickname, fid))
             self._conn.execute('UPDATE online_sessions SET uid=? WHERE friend_id=?', (uid, fid))
+            if pending or not keep['uid']:
+                self._record_friend_event_locked(fid, 'uid_completed', now)
             if old_name != nickname:
                 self._conn.execute('INSERT OR IGNORE INTO nickname_aliases(friend_id,alias,created_at) VALUES (?,?,?)',
                                    (fid, old_name, now))
@@ -886,9 +936,7 @@ class Database(EvidenceStoreMixin):
             if row is None:
                 return
             self._settle_unobserved_locked(row, now)
-            self._conn.execute(
-                "INSERT INTO status_events(uid,nickname,event_type,event_time) VALUES (?,?,'removed',?)",
-                (row['uid'], row['nickname'], now))
+            self._record_friend_event_locked(fid, 'removed', now)
             self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -933,6 +981,8 @@ class Database(EvidenceStoreMixin):
                 self._conn.execute('UPDATE friends SET tags=? WHERE id=?', (tags, fid))
             self._prune_profile_captures_locked(fid, uid)
             self._conn.execute('UPDATE online_sessions SET uid=? WHERE friend_id=?', (uid, fid))
+            if uid and not current['uid']:
+                self._record_friend_event_locked(fid, 'uid_completed', now_str())
             for old_name in old_names - {nickname}:
                 if old_name:
                     self._conn.execute('INSERT OR IGNORE INTO nickname_aliases(friend_id,alias,created_at) VALUES (?,?,?)',
@@ -1096,8 +1146,21 @@ class Database(EvidenceStoreMixin):
     # ------------------------------------------------------------------
     # 扫描会话
     # ------------------------------------------------------------------
-    def add_session(self, scan_time: str, total: int, online: int, offline: int) -> int:
-        with self._lock:
+    def add_session(self, scan_time: str, total: int, online: int, offline: int, *, friend_ids=None) -> int:
+        with self._lock, self._conn:
+            if friend_ids is not None:
+                rows = [self.get_friend(fid) for fid in sorted(set(friend_ids))]
+                if any(row is None for row in rows):
+                    raise ValueError('扫描到的档案已不存在')
+                baseline = self._conn.execute(
+                    "SELECT value FROM account_metadata WHERE key='legacy_membership_baseline'").fetchone()
+                previous = json.loads(baseline[0]) if baseline else None
+                comparison = compare_rosters(previous, rows)
+                self._record_roster_additions_locked(comparison, rows, scan_time)
+                # Legacy disappearance still requires its existing repeated
+                # observations; this snapshot is only for addition detection.
+                self._set_metadata_locked('legacy_membership_baseline', json.dumps(
+                    dict(scan_time=scan_time, total=len(rows), rows=rows), ensure_ascii=False))
             cur = self._conn.execute(
                 "INSERT INTO scan_sessions (scan_time, total_friends, online_count, offline_count) VALUES (?, ?, ?, ?)",
                 (scan_time, total, online, offline),
@@ -1115,6 +1178,8 @@ class Database(EvidenceStoreMixin):
             # changes out of the visible history.
             where = ('WHERE event_type IN (%s)' % ','.join('?' for _ in STATUS_CHANGE_LABELS)
                      if changes_only else '')
+            if changes_only:
+                where += ' AND has_event_identity(uid,nickname)'
             params = (*STATUS_CHANGE_LABELS, limit) if changes_only else (limit,)
             rows = self._conn.execute(
                 f"SELECT * FROM status_events {where} ORDER BY id DESC LIMIT ?", params
@@ -1144,6 +1209,21 @@ class Database(EvidenceStoreMixin):
     def get_visual_profiles(self):
         with self._lock:
             return [dict(r) for r in self._conn.execute('SELECT v.*,f.nickname,f.level,f.qianxing_level,f.tags,f.uid,f.signature,f.signature_pending,f.nickname_pending,f.identity_review_key,f.identity_review_reason FROM visual_profiles v JOIN friends f ON f.id=v.friend_id')]
+
+    def get_identity_candidate_ids(self):
+        """Only the latest roster, new online observations and unresolved owners.
+
+        Historical drafts retain their evidence but cannot compete with today's
+        cards. A returning archived friend is recovered by an actual UID read.
+        Before any complete scan all existing archives remain candidates.
+        """
+        with self._lock:
+            if not self._conn.execute('SELECT 1 FROM verified_scan WHERE id=1').fetchone():
+                return {row[0] for row in self._conn.execute('SELECT id FROM friends')}
+            ids = {row[0] for row in self._conn.execute('''SELECT friend_id FROM verified_roster
+                UNION SELECT friend_id FROM online_scan_roster''')}
+            ids.update(row['id'] for row in pending_removals(self._conn))
+            return ids
 
     def get_nickname_image(self, fid):
         with self._lock:
@@ -1191,9 +1271,9 @@ class Database(EvidenceStoreMixin):
 
     def _apply_scan_records_locked(self, records, scan_time):
         ids = []
-        has_baseline = self._conn.execute('SELECT 1 FROM verified_scan WHERE id=1').fetchone() is not None
         for record in records:
             entry, fid = record['entry'], record.get('id')
+            completed_uid = False
             uid = record.get('uid') or None
             signature = record.get('signature', getattr(entry, 'signature', None))
             signature_pending = bool(getattr(entry, 'signature_pending', False))
@@ -1213,6 +1293,7 @@ class Database(EvidenceStoreMixin):
                     raise ValueError('UID 必须是 9 位数字')
                 # UID is the identity. Never merge all rows sharing a name.
                 supplied = self.get_friend(fid) if fid is not None else None
+                completed_uid = supplied is not None and not supplied['uid']
                 if fid is not None and (supplied is None or supplied['uid'] not in (None, '', uid)):
                     raise ValueError('UID 与已有身份冲突，未改绑')
                 owners = self._conn.execute('SELECT id FROM friends WHERE uid=? ORDER BY id', (uid,)).fetchall()
@@ -1249,14 +1330,6 @@ class Database(EvidenceStoreMixin):
                 row = self.get_friend(fid)
                 if row is None:
                     raise ValueError('提交前好友档案已被修改')
-                # A historical/manual archive can enter the roster without
-                # creating a new row. Count it once, including online scans;
-                # UID merges have already remapped both roster tables above.
-                if has_baseline and not self._conn.execute(
-                        'SELECT 1 FROM verified_roster WHERE friend_id=? UNION ALL '
-                        'SELECT 1 FROM online_scan_roster WHERE friend_id=? LIMIT 1', (fid, fid)).fetchone():
-                    self._conn.execute("INSERT INTO status_events(uid,nickname,event_type,event_time) VALUES (?,?,'added',?)",
-                                       (uid or row['uid'], row['nickname'], scan_time))
                 if signature_pending and record.get('signature_image'):
                     corrected = self.get_field_correction(fid, 'signature', record['signature_image'])
                     if corrected is not None:
@@ -1290,6 +1363,8 @@ class Database(EvidenceStoreMixin):
                 raise ValueError('身份核查标识和说明必须是文字或空值')
             self._conn.execute('UPDATE friends SET identity_review_key=?, identity_review_reason=? WHERE id=?',
                                (review_key or None, review_reason or None, fid))
+            if completed_uid:
+                self._record_friend_event_locked(fid, 'uid_completed', scan_time)
             if fid in ids:
                 raise ValueError('同一完整名单不能重复计入相同档案')
             ids.append(fid)
@@ -1308,6 +1383,16 @@ class Database(EvidenceStoreMixin):
                     signature_pending=signature_pending, commit=False)
         return ids
 
+    def _record_roster_additions_locked(self, comparison, rows, scan_time, already_seen=()):
+        classify_additions(self._conn, comparison, scan_time)
+        for kind in ('added', 'reidentified', 'unconfirmed_added'):
+            for item in comparison.get(kind, []):
+                row = next((row for row in rows if
+                            (item.get('id') is not None and row['id'] == item['id']) or
+                            (item.get('uid') and row['uid'] == item['uid'])), None)
+                if row is not None and row['id'] not in already_seen:
+                    self._record_friend_event_locked(row['id'], kind, scan_time)
+
     def apply_verified_scan(self, records, scan_time, elapsed, evidence_dir,
                             *, comparison=None, identity_complete=False):
         """Commit a fully checked ordered roster and its fingerprints atomically.
@@ -1321,9 +1406,14 @@ class Database(EvidenceStoreMixin):
         scan_time = _time_text(scan_time)
         self._validate_scan_identities(records, identity_complete=identity_complete)
         with self._lock, self._conn:
-            previous = self.get_complete_roster() if comparison is not None else None
+            previous = self.get_complete_roster()
+            last_event = self._conn.execute('SELECT COALESCE(MAX(id),0) FROM status_events').fetchone()[0]
             ids = self._apply_scan_records_locked(records, scan_time)
             rows = [self.get_friend(fid) for fid in ids]
+            for record, row in zip(records, rows):
+                candidates = record.get('identity_candidate_ids')
+                if not row['uid'] and candidates:
+                    row['identity_candidate_ids'] = sorted(set(candidates))
             if previous is not None:
                 # Normalize confirmed merges, but preserve fields observed in
                 # the old scan. A newly enrolled UID is not a past observation.
@@ -1336,8 +1426,32 @@ class Database(EvidenceStoreMixin):
                     if fid not in normalized or old.get('uid'):
                         normalized[fid] = old
                 previous['rows'] = list(normalized.values())
-            committed_comparison = (compare_rosters(previous, rows)
-                                    if comparison is not None else None)
+                # Keep unresolved old identities until a later scan can prove
+                # presence or absence; the latest observed total is unchanged.
+                pending = pending_removals(self._conn)
+                pending_ids = {old['id'] for old in pending}
+                for row in rows:
+                    inherited = normalized.get(row['id'], {}).get('identity_candidate_ids') or []
+                    if not row['uid'] and inherited:
+                        row['identity_candidate_ids'] = sorted(set(inherited) | set(row.get('identity_candidate_ids') or []))
+                # An unresolved card and its old candidates are alternatives,
+                # not additional members. Once its UID is read, compare with
+                # the old known identities, not with the anonymous placeholder.
+                previous['rows'] = [old for old in previous['rows'] if old.get('uid') or
+                    not (set(old.get('identity_candidate_ids') or []) & pending_ids)]
+                represented = {old['id'] for old in previous['rows']}
+                for old in pending:
+                    if old['id'] not in represented:
+                        previous['rows'].append(old)
+            committed_comparison = compare_rosters(previous, rows)
+            deferred = defer_unresolved_removals(previous, rows, committed_comparison)
+            save_pending_removals(self._conn, deferred)
+            already_seen = {row[0] for row in self._conn.execute('SELECT friend_id FROM online_scan_roster')}
+            self._record_roster_additions_locked(committed_comparison, rows, scan_time, already_seen)
+            completed = [dict(row) for row in self._conn.execute('''SELECT friend_id AS id,uid,nickname
+                FROM status_events WHERE id>? AND event_type='uid_completed' ''', (last_event,))]
+            if completed:
+                committed_comparison['uid_completed'] = completed
             for row in self._conn.execute("SELECT * FROM friends WHERE current_status='online'").fetchall():
                 if row['id'] not in ids:
                     self._settle_unobserved_locked(row, scan_time)
@@ -1348,17 +1462,16 @@ class Database(EvidenceStoreMixin):
                                (scan_time, len(ids), elapsed, evidence_dir))
             self._conn.execute('INSERT OR REPLACE INTO roster_baseline VALUES (1,?,?)',
                                (scan_time, json.dumps(rows, ensure_ascii=False)))
-            if committed_comparison is not None:
+            if comparison is not None:
                 self._conn.execute('INSERT INTO roster_comparisons(scan_time,details_json) VALUES (?,?)',
                                    (scan_time, json.dumps(committed_comparison, ensure_ascii=False)))
-                if committed_comparison.get('basis') in ('uid', 'local_id'):
-                    for missing in committed_comparison.get('removed', []):
-                        old = (self.get_friend(missing['id']) if 'id' in missing
-                               else self.find_by_uid(missing['uid']))
-                        if old is not None and old['id'] not in ids:
-                            self._settle_unobserved_locked(old, scan_time)
-                            self._conn.execute("INSERT INTO status_events(uid,nickname,event_type,event_time) VALUES (?,?,'removed',?)",
-                                               (old['uid'], old['nickname'], scan_time))
+            if committed_comparison.get('basis') in ('uid', 'local_id'):
+                for missing in committed_comparison.get('removed', []):
+                    old = (self.get_friend(missing['id']) if 'id' in missing
+                           else self.find_by_uid(missing['uid']))
+                    if old is not None and old['id'] not in ids:
+                        self._settle_unobserved_locked(old, scan_time)
+                        self._record_friend_event_locked(old['id'], 'removed', scan_time)
             online = sum(r['entry'].status == 'online' for r in records)
             offline = sum(r['entry'].status == 'offline' for r in records)
             self._conn.execute('INSERT INTO scan_sessions(scan_time,total_friends,online_count,offline_count) VALUES (?,?,?,?)',
@@ -1383,8 +1496,17 @@ class Database(EvidenceStoreMixin):
                for record in observed_offline):
             raise ValueError('离线观察必须对应已有档案和明确离线的卡片')
         with self._lock, self._conn:
+            previous = self.get_complete_roster()
             observed_ids = self._apply_scan_records_locked(records+observed_offline, scan_time)
             ids = observed_ids[:len(records)]
+            if previous is not None:
+                visible_before = {row[0] for row in self._conn.execute(
+                    'SELECT friend_id FROM verified_roster UNION SELECT friend_id FROM online_scan_roster')}
+                rows = [self.get_friend(fid) for fid in observed_ids]
+                online_comparison = dict(basis='uid' if valid_uid_roster(previous['rows']) else 'local_id',
+                    added=[row for row in rows if row['id'] not in visible_before and has_event_identity(row)],
+                    unidentified_removed=[row for row in previous['rows'] if not has_event_identity(row)])
+                self._record_roster_additions_locked(online_comparison, rows, scan_time, visible_before)
             self._conn.executemany('INSERT OR IGNORE INTO online_scan_roster VALUES (?)',
                                    ((fid,) for fid in observed_ids))
             visible = {row[0] for row in self._conn.execute(

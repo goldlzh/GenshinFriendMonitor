@@ -54,7 +54,7 @@ class QianxingStorageTests(unittest.TestCase):
         self.assertEqual((61, 0, '休闲玩家 · 建造爱好者'),
                          (saved['level'], saved['qianxing_level'], saved['tags']))
         self.assertEqual(1, len(self.database.get_all_friends()))
-        self.assertEqual(1, sum(event['event_type'] == 'added' for event in self.database.export_events()))
+        self.assertEqual(0, sum(event['event_type'] == 'added' for event in self.database.export_events()))
         self.assertEqual(1, self.database._conn.execute('SELECT COUNT(*) FROM online_sessions').fetchone()[0])
         self.assertEqual([b'qianxing home'],
                          [item['image'] for item in self.database.get_profile_captures(fid)])

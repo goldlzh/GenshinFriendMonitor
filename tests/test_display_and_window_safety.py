@@ -133,7 +133,7 @@ class WindowAndDisplayTests(unittest.TestCase):
             path = export_friends_to_excel([{'nickname':'好友','current_status':'unknown',
                 'qianxing_activity':'编辑内容中','qianxing_activity_summary':'编辑内容中：00:00:10',
                 'qianxing_activity_ranges':'编辑内容中：10:00-10:01'}],
-                [{'event_type': kind} for kind in ('scan_default_offline', 'observed_online',
+                [{'event_type': kind, 'nickname': '好友'} for kind in ('scan_default_offline', 'observed_online',
                  'online', 'offline', 'unknown', 'manual_import', 'renamed', 'added', 'removed')], directory)
             wb = load_workbook(path)
             try:

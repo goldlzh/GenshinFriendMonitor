@@ -89,6 +89,8 @@ class AccountExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(excel_export, 'datetime') as clock:
             clock.now.return_value.strftime.return_value = '20260920_100000'
             for database in (first, second):
+                friend = database.find_by_uid(FRIEND)
+                database.update_status(friend['id'], 'online', None, None, '2026-09-20T10:01:00')
                 path = Path(excel_export.export_friends_to_excel(
                     database.export_rows(), database.export_events(), directory, account_uid=database.account_uid))
                 paths.append(path)

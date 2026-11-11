@@ -878,15 +878,15 @@ def compatible_nickname_geometry(a, b):
             and abs((ax+ar-bx-br)/2) <= 10 and abs((ay+ab-by-bb)/2) <= 4)
 
 
-def nickname_ink_similarity(a, b):
-    """Compare all nickname strokes when card shading changes after a hover.
+def nickname_comparison_images(a, b):
+    """Prepare complete nickname strokes without the changing card background.
 
     Keep both the crop geometry and the full ink span. A fragment or a blank
     region cannot be stretched to stand in for a complete nickname. Preserve
     grayscale edges: binarization loses antialiasing on outlined/color names.
     """
     if not compatible_nickname_geometry(nickname_ink_geometry(a), nickname_ink_geometry(b)):
-        return 0.
+        return None
     foregrounds = []
     for image in (a, b):
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
@@ -903,10 +903,20 @@ def nickname_ink_similarity(a, b):
     foregrounds = [cv2.copyMakeBorder(image, 0, height-image.shape[0],
                    0, width-image.shape[1], cv2.BORDER_CONSTANT, value=(0, 0, 0))
                    for image in foregrounds]
-    return visual_similarity(*foregrounds)
+    return foregrounds
 
 
-def same_person(a: CardObservation, b: CardObservation):
+def nickname_ink_similarity(a, b):
+    foregrounds = nickname_comparison_images(a, b)
+    return 0. if foregrounds is None else visual_similarity(*foregrounds)
+
+
+def same_person(a: CardObservation, b: CardObservation, *, name_similarity=None):
+    """Compare original observations, optionally with a complete-name score.
+
+    Keep original pixels for blank/stroke checks even when the caller measured
+    the nickname against the geometry-checked contrast representation.
+    """
     if a.entry and b.entry:
         mode = getattr(a.entry, 'interface_mode', 'normal')
         if mode != getattr(b.entry, 'interface_mode', 'normal'):
@@ -929,7 +939,9 @@ def same_person(a: CardObservation, b: CardObservation):
         return visual_similarity(a.avatar_image, b.avatar_image) >= .95
     pending = (a.entry and a.entry.nickname_pending) or (b.entry and b.entry.nickname_pending)
     avatar = visual_similarity(a.avatar_image, b.avatar_image)
-    if (visual_similarity(a.name_image, b.name_image) >= .91
+    name_score = (visual_similarity(a.name_image, b.name_image)
+                  if name_similarity is None else name_similarity)
+    if (name_score >= .91
             and avatar >= (.85 if pending else .90)):
         return True
     # Moving a complete card out of the viewport's bottom fade changes its

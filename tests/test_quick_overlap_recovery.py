@@ -24,10 +24,10 @@ from app.parser import FriendEntry
 from app.quick_scan import QuickScanWorkflow
 
 
-def load_private_pair():
-    value = os.environ.get('GENSHIN_T01_EVIDENCE', '').strip()
+def load_private_pair(env_name='GENSHIN_T01_EVIDENCE'):
+    value = os.environ.get(env_name, '').strip()
     if not value:
-        raise unittest.SkipTest('Set GENSHIN_T01_EVIDENCE to opt into the private T01 replay')
+        raise unittest.SkipTest('Set '+env_name+' to opt into this private replay')
     root = Path(value).resolve()
     files = list(root.rglob('overlap-failed.json')) if root.is_dir() else []
     if len(files) != 1:
@@ -99,6 +99,44 @@ class SyntheticPendingOverlapTests(unittest.TestCase):
             a,b = self.pair()
             b.name_image[:,0 if kind=='blank' else 90:] = 235
             with self.subTest(kind=kind):
+                self.assertFalse(QuickScanWorkflow.same_person(None,a,b))
+
+    def test_blank_tail_shading_does_not_outweigh_complete_pending_glyphs(self):
+        image = np.full((57,564,3),235,np.uint8)
+        cv2.putText(image,'GFM',(10,39),cv2.FONT_HERSHEY_SIMPLEX,
+                    1.,(40,40,40),2,cv2.LINE_AA)
+        gradient = np.linspace(235,170,564).astype(np.uint8)
+        shaded = np.broadcast_to(gradient[None,:,None],image.shape).copy()
+        mask = nickname_ocr.ink_mask(image)>0
+        shaded[mask] = image[mask]
+        shaded[mask & (np.indices(mask.shape)[1]<40)] = 130
+        a,b = self.pair()
+        a.name_image,b.name_image = image,shaded
+        b.entry = replace(b.entry,nickname='',nickname_pending=True)
+        self.assertLess(layout.visual_similarity(image,shaded),.91)
+        self.assertLess(layout.nickname_ink_similarity(image,shaded),.97)
+        self.assertTrue(nickname_ocr.whole_nickname_foreground_agrees(image,shaded))
+        self.assertTrue(QuickScanWorkflow.same_person(None,a,b))
+
+    def test_feature_comparison_does_not_misread_nonblank_pending_names_as_blank(self):
+        a,b = self.pair()
+        b.entry = replace(b.entry,nickname='',nickname_pending=True)
+        b.avatar_image = np.clip(b.avatar_image.astype(float)+
+            np.random.default_rng(21).normal(0,40,b.avatar_image.shape),0,255).astype(np.uint8)
+        self.assertGreater(layout.visual_similarity(a.avatar_image,b.avatar_image),.85)
+        self.assertLess(layout.visual_similarity(a.avatar_image,b.avatar_image),.95)
+        self.assertTrue(QuickScanWorkflow.same_person(None,a,b))
+
+    def test_original_nonblank_names_cannot_bypass_feature_match_using_identical_avatars(self):
+        for shade in (170,190,200):
+            a,b = self.pair()
+            b.entry = replace(b.entry,nickname='',nickname_pending=True)
+            mask = nickname_ocr.ink_mask(a.name_image)>0
+            b.name_image[mask & (np.indices(mask.shape)[1]<90)] = shade
+            with self.subTest(shade=shade):
+                self.assertTrue(nickname_ocr.whole_nickname_foreground_agrees(
+                    a.name_image,b.name_image))
+                self.assertLess(layout.nickname_ink_similarity(a.name_image,b.name_image),.91)
                 self.assertFalse(QuickScanWorkflow.same_person(None,a,b))
 
 
@@ -206,6 +244,40 @@ class QuickPendingOverlapWorkflowTests(unittest.TestCase):
         self.assertIsNone(record.get('uid'))
         self.assertIsNotNone(record.get('identity_review_key'))
         self.assertTrue(result.complete)
+
+
+class PrivateNormalizedOverlapTests(unittest.TestCase):
+    def setUp(self):
+        self.report,self.frame,self.a,self.b = load_private_pair('GENSHIN_T01_LIVE_EVIDENCE')
+
+    def test_real_pending_name_keeps_continuity_despite_long_blank_tail_fade(self):
+        self.assertTrue(self.a.entry.nickname_pending and self.b.entry.nickname_pending)
+        self.assertLess(layout.visual_similarity(self.a.name_image,self.b.name_image),.91)
+        self.assertTrue(nickname_ocr.whole_nickname_foreground_agrees(
+            self.a.name_image,self.b.name_image))
+        self.assertTrue(QuickScanWorkflow.same_person(None,self.a,self.b))
+        self.assertTrue(QuickScanWorkflow.same_person(None,self.b,self.a))
+
+    def test_real_pending_continuation_never_invents_name_or_uid(self):
+        harness = baseline.FastScanRegressions('runTest')
+        harness.setUp()
+        self.addCleanup(harness.doCleanups)
+        workflow = QuickScanWorkflow(harness.scan)
+        index = self.report['position']-1
+        workflow.expected = 178
+        workflow.offset = self.report['offset']
+        workflow.origin = workflow.offset+self.b.band.top-index*layout.ROW_PITCH
+        workflow.slots[index] = self.a
+        page = SimpleNamespace(confirmed=True,expected_total=178,observations=[self.b],
+                               entries=[self.b.entry],issues=[])
+        try:
+            workflow.add_page(self.frame,page)
+        except RosterChanged:
+            self.fail('Complete pending glyphs were rejected because of blank-tail shading')
+        self.assertTrue(workflow.slots[index].entry.nickname_pending)
+        self.assertEqual('',workflow.slots[index].entry.nickname)
+        self.assertEqual({},workflow.uids)
+        self.assertEqual([],harness.db.get_all_friends())
 
 
 if __name__ == '__main__':

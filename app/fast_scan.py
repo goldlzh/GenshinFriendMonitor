@@ -407,9 +407,13 @@ class FastScan:
                 return {'needed': True, 'reason': 'no_rows', 'first': None, 'last': None}
             first = round((self.offset+pixels+rows[0].top-self.origin)/layout.ROW_PITCH)
             last = first+len(rows)-1
-            next_unseen = max(self.slots, default=-1)+1
-            reason = ('row_gap' if first > next_unseen else
-                      'no_new_rows' if last < next_unseen else '')
+            # Progress is relative to this viewport, not the entire saved draft:
+            # late identity checks revisit old rows with a complete slots map.
+            # The next image must reach the next row without skipping it; its
+            # overlapping identities are still checked by add_page afterwards.
+            next_row = round((self.offset+before_bands[-1].top-self.origin)/layout.ROW_PITCH)+1
+            reason = ('row_gap' if first > next_row else
+                      'no_new_rows' if last < next_row else '')
             # Five complete consecutive cards are useful coverage. A partial
             # already-seen row above them does not require reversing the list.
             return {'needed': bool(reason), 'reason': reason, 'first': first, 'last': last}

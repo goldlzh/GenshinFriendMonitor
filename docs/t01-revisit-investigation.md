@@ -112,7 +112,7 @@ GenshinFriendMonitor-windows-x64-v1.1.1-t01-revisit1.zip
 | EXE SHA256 | `7d43258e760e5eda17b8c66bfb9db208e02b7e6c05f2f00ac88ab0153d68f8ed` |
 | 打包 | PyInstaller 6.21.0、Python 3.13.11 x64；58 份依赖许可证；ZIP 公共文件清单与 AMD64 检查通过 |
 | 运行依赖 | requirements-local-lock.txt 所列版本均匹配；包含 det/rec/cls 模型、Qt qwindows 插件及 fontTools 支持文件 |
-| 程序启动/OCR 冒烟 | 另见输出目录 smoke/smoke-result.json 的实际结果，不作为真实游戏验收 |
+| 程序启动/OCR 冒烟 | GPT-6.1 Terra 执行：两次正常退出码 0；合成 UID/昵称/等级正确；取消后 integrity=ok、friends=0。合成签名仍未可靠提取，属于既有样本现象；不是全部字段正确。详见 smoke/smoke-result.json |
 | 复测说明 | package/RETEST-T01.md；必须观察历史身份回访实际触发、complete/committed 和最终名单 |
 
 首个 candidate1 构建发现缺少 fonttools，许可打包失败，未作为可复测包交付。随后仅在独立克隆的 .venv 内安装 requirements-local-lock.txt 指定版本，未卸载或更新虚拟环境外的全局包，重新完整测试、构建 candidate2。构建成功本身不等于干净系统或真实游戏验收通过。

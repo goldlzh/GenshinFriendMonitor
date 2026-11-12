@@ -52,5 +52,12 @@ Files: reuse `tests/test_quick_revisit_scroll.py`, `tests/test_quick_scan_workfl
 
 - [x] Have GPT-6.1 Terra check the local game's availability; do not change credentials, privileges or system security.
 - [x] When offline tests are sound, run the corrected source or a separately built test candidate with fresh config/data/logs. Never overwrite the user's installed/released copy.
-- [ ] If the game is ready, execute one single quick scan, observe overlap/identity revisit, then inspect complete/committed, counts and identity safety. Preserve evidence locally. If unavailable, record the precise blocker without claiming live success.
-- [ ] Record source diff, replay coverage, tests, remaining risks and local live outcome. Leave cross-computer acceptance to the stable pre-release stage.
+- [x] If the game is ready, execute one single quick scan, observe overlap/identity revisit, then inspect complete/committed, counts and identity safety. Preserve evidence locally. If unavailable, record the precise blocker without claiming live success.
+- [x] Record source diff, replay coverage, tests, remaining risks and local live outcome. Leave cross-computer acceptance to the stable pre-release stage.
+
+Outcome: final source e82ac55 completed the user-started local quick scan with 178/178,
+63 recorded pages including 27 historical revisit pages, complete=true and committed=true.
+Read-only account DB audit:178 unique rows,13 nonempty UIDs,no duplicate nonempty UID groups,
+integrity ok;6 names remain pending,all6 with UID. Full manual roster accuracy and portable/cross-machine
+acceptance are not claimed. Evidence and aggregate reports are kept outside Git under
+the existing gfm-overlap-recovery-20261112 output directory; first failed live run preserved.

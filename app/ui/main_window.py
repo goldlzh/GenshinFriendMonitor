@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, QObject, QTimer, Signal, QItemSelectionModel, QSize
-from PySide6.QtGui import QColor, QFont, QPixmap, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFont, QPixmap, QIcon, QKeySequence, QShortcut, QImage
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -63,11 +63,39 @@ _FRIEND_HEADERS = [
 _FRIEND_COL = {key: index for index, (key, _) in enumerate(_FRIEND_HEADERS)}
 
 
-def nickname_pixmap(data, width=260, height=38):
-    """Keep the complete nickname region, including meaningful blank characters."""
+def _trim_preview(pixmap):
+    """Remove only confident outer horizontal whitespace from a display copy."""
+    import numpy as np
+
+    image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
+    pixels = np.frombuffer(image.constBits(), dtype=np.uint8).reshape(
+        image.height(), image.bytesPerLine())[:, :image.width()*4].reshape(
+            image.height(), image.width(), 4)
+    if np.any(pixels[:, :, 3] < 250):
+        return pixmap
+    rgb = pixels[:, :, :3].astype(np.int16)
+    # A row-wise background tolerates the card's gentle vertical gradient.
+    background = np.median(rgb, axis=1, keepdims=True)
+    foreground = np.max(np.abs(rgb-background), axis=2) > 20
+    count = np.count_nonzero(foreground)
+    if count < 12 or count > foreground.size*.35:
+        return pixmap  # Blank, tiny/uncertain marks, or a decorated background.
+    xs = np.where(foreground)[1]
+    left, right = max(0, int(xs.min())-6), min(image.width(), int(xs.max())+7)
+    if right-left >= image.width()*.9:
+        return pixmap
+    # Keep all vertical pixels and internal spacing, including detached marks.
+    return pixmap.copy(left, 0, right-left, image.height())
+
+
+def nickname_pixmap(data, width=260, height=38, *, trim=False):
+    """Render a bounded preview; original bytes and raw-view behavior stay intact."""
     pixmap = QPixmap()
     if not data or not pixmap.loadFromData(data):
         return pixmap
+    if trim:
+        pixmap = _trim_preview(pixmap)
+        width, height = min(width, pixmap.width()), min(height, pixmap.height())
     return pixmap.scaled(QSize(width, height), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
@@ -178,9 +206,13 @@ class MainWindow(QMainWindow):
         self.friends_table.cellDoubleClicked.connect(
             lambda row, column: self._edit_friend(row) if column in (_FRIEND_COL['nickname'], _FRIEND_COL['signature']) else None)
         self.friends_table.setIconSize(QSize(260, 38))
+        self.friends_table.setWordWrap(False)
         # Keep columns readable on a narrow monitor; additional history scrolls
         # horizontally instead of squeezing both levels and tags into tiny cells.
         self.friends_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.friends_table.horizontalHeader().setMinimumSectionSize(44)
+        self.friends_table.horizontalHeader().setTextElideMode(Qt.ElideRight)
+        self._auto_friend_column_widths = {}
         widths = dict(uid=100, nickname=280, level=80, qianxing_level=80, tags=140,
                       signature=260, qianxing_activity=190, qianxing_activity_summary=230,
                       qianxing_activity_ranges=260,
@@ -188,6 +220,8 @@ class MainWindow(QMainWindow):
                       today_ranges=150, status_updated_at=155, last_seen=115, profile=86)
         for key, width in widths.items():
             self.friends_table.setColumnWidth(_FRIEND_COL[key], width)
+        for column, (_, label) in enumerate(_FRIEND_HEADERS):
+            self.friends_table.horizontalHeaderItem(column).setToolTip(label)
         self.friends_table.horizontalHeaderItem(_FRIEND_COL['level']).setToolTip('普通好友界面的冒险等级')
         self.friends_table.horizontalHeaderItem(_FRIEND_COL['qianxing_level']).setToolTip('千星奇域界面的千星等级，与冒险等级分别保存')
         self.friends_table.horizontalHeaderItem(_FRIEND_COL['tags']).setToolTip('千星奇域好友标签；完整内容也可在编辑窗口查看')
@@ -873,13 +907,13 @@ class MainWindow(QMainWindow):
         self._friends_cache = friends
         columns = _FRIEND_COL
         for row, f in enumerate(friends):
-            self.friends_table.setItem(row, columns['uid'], self._item(f.get("uid") or ""))
-            name_item = self._item(f.get("nickname") or "")
+            self.friends_table.setItem(row, columns['uid'], self._friend_item(f.get("uid") or ""))
+            name_item = self._friend_item(f.get("nickname") or "")
             if f.get('nickname_pending'):
-                pixmap = nickname_pixmap(self.db.get_nickname_image(f['id']))
+                pixmap = nickname_pixmap(self.db.get_nickname_image(f['id']), width=200, trim=True)
                 name_item.setText('' if not pixmap.isNull() else '待核查（截图不可用）')
                 name_item.setIcon(QIcon(pixmap))
-                hint = '昵称待人工核查，完整截图保留空白及特殊字符。可一直以图片显示；双击可查看或填写昵称。'
+                hint = '昵称待人工核查，预览仅裁去外围留白，原始截图及内部空白、特殊字符仍保留。双击可查看或填写昵称。'
                 if f.get('identity_review_reason'):
                     hint = f['identity_review_reason']+'。'+hint
                 name_item.setToolTip(hint)
@@ -888,17 +922,17 @@ class MainWindow(QMainWindow):
             else:
                 self.friends_table.setRowHeight(row, self.friends_table.verticalHeader().defaultSectionSize())
             self.friends_table.setItem(row, columns['nickname'], name_item)
-            self.friends_table.setItem(row, columns['level'], self._item(str(f.get("level") or "")))
+            self.friends_table.setItem(row, columns['level'], self._friend_item(str(f.get("level") or "")))
             qianxing_level = f.get('qianxing_level')
             self.friends_table.setItem(row, columns['qianxing_level'],
-                                       self._item('' if qianxing_level is None else str(qianxing_level)))
-            tag_item = self._item(f.get('tags') or '')
+                                       self._friend_item('' if qianxing_level is None else str(qianxing_level)))
+            tag_item = self._friend_item(f.get('tags') or '')
             tag_item.setToolTip(f.get('tags') or '')
             self.friends_table.setItem(row, columns['tags'], tag_item)
-            signature_item = self._item(f.get('signature') or '')
+            signature_item = self._friend_item(f.get('signature') or '')
             if f.get('signature_pending'):
                 captures = self.db.get_field_captures(f['id'], 'signature')
-                pixmap = nickname_pixmap(captures[0]['image'] if captures else None)
+                pixmap = nickname_pixmap(captures[0]['image'] if captures else None, trim=True)
                 signature_item.setText('' if not pixmap.isNull() else '签名待校准')
                 signature_item.setIcon(QIcon(pixmap))
                 signature_item.setBackground(QColor('#fff2d5'))
@@ -909,16 +943,45 @@ class MainWindow(QMainWindow):
             self.friends_table.setItem(row, columns['signature'], signature_item)
             self._set_activity_cells(row, f)
             self.friends_table.setItem(row, columns['status'], self._status_item(f))
-            self.friends_table.setItem(row, columns['online_duration'], self._item(_fmt_duration(self._online_secs(f))))
-            self.friends_table.setItem(row, columns['cumulative_duration'], self._item(_fmt_duration(self._cumulative_secs(f))))
-            self.friends_table.setItem(row, columns['today_ranges'], self._item(self._today_ranges(f)))
-            self.friends_table.setItem(row, columns['status_updated_at'], self._item(f.get("status_updated_at") or ""))
-            self.friends_table.setItem(row, columns['last_seen'], self._item(f.get("last_seen") or ""))
+            self.friends_table.setItem(row, columns['online_duration'], self._friend_item(_fmt_duration(self._online_secs(f))))
+            self.friends_table.setItem(row, columns['cumulative_duration'], self._friend_item(_fmt_duration(self._cumulative_secs(f))))
+            self.friends_table.setItem(row, columns['today_ranges'], self._friend_item(self._today_ranges(f)))
+            self.friends_table.setItem(row, columns['status_updated_at'], self._friend_item(f.get("status_updated_at") or ""))
+            self.friends_table.setItem(row, columns['last_seen'], self._friend_item(f.get("last_seen") or ""))
             profile_btn = QPushButton('查看主页')
             profile_btn.setToolTip('查看最近保留的两张好友主页截图；未保存截图时显示待采集')
             profile_btn.clicked.connect(lambda checked=False, fid=f['id']: self._show_profile_captures(fid))
             self.friends_table.setCellWidget(row, columns['profile'], profile_btn)
+        self._compact_friend_columns()
         self._update_uid_notice()
+
+    def _compact_friend_columns(self) -> None:
+        """Fit useful content within caps, retaining widths resized by the user."""
+        table = self.friends_table
+        metrics = table.fontMetrics()
+        caps = dict(uid=110, nickname=220, level=88, qianxing_level=88, tags=140,
+                    signature=280, status=120, qianxing_activity=180,
+                    qianxing_activity_summary=140, qianxing_activity_ranges=180,
+                    online_duration=120, cumulative_duration=120, today_ranges=180,
+                    status_updated_at=160, last_seen=130, profile=100)
+        for column, (key, label) in enumerate(_FRIEND_HEADERS):
+            previous = self._auto_friend_column_widths.get(column)
+            if previous is not None and table.columnWidth(column) != previous:
+                continue
+            width = max(44, min(88, metrics.horizontalAdvance(label)+18))
+            for row in range(table.rowCount()):
+                item = table.item(row, column)
+                if item is not None:
+                    content = metrics.horizontalAdvance(item.text())
+                    if not item.icon().isNull():
+                        content += item.icon().actualSize(table.iconSize()).width()+4
+                    width = max(width, content+16)
+                widget = table.cellWidget(row, column)
+                if widget is not None:
+                    width = max(width, widget.sizeHint().width()+8)
+            width = min(caps[key], width)
+            table.setColumnWidth(column, width)
+            self._auto_friend_column_widths[column] = table.columnWidth(column)
 
     def _update_uid_notice(self) -> None:
         rows = self.db.get_display_friends()
@@ -998,10 +1061,10 @@ class MainWindow(QMainWindow):
             self._friends_cache = friends
             for row, f in enumerate(friends):
                 self.friends_table.setItem(row, _FRIEND_COL['status'], self._status_item(f))
-                self.friends_table.setItem(row, _FRIEND_COL['online_duration'], self._item(_fmt_duration(self._online_secs(f))))
-                self.friends_table.setItem(row, _FRIEND_COL['cumulative_duration'], self._item(_fmt_duration(self._cumulative_secs(f))))
-                self.friends_table.setItem(row, _FRIEND_COL['today_ranges'], self._item(self._today_ranges(f)))
-                self.friends_table.setItem(row, _FRIEND_COL['status_updated_at'], self._item(f.get('status_updated_at') or ''))
+                self.friends_table.setItem(row, _FRIEND_COL['online_duration'], self._friend_item(_fmt_duration(self._online_secs(f))))
+                self.friends_table.setItem(row, _FRIEND_COL['cumulative_duration'], self._friend_item(_fmt_duration(self._cumulative_secs(f))))
+                self.friends_table.setItem(row, _FRIEND_COL['today_ranges'], self._friend_item(self._today_ranges(f)))
+                self.friends_table.setItem(row, _FRIEND_COL['status_updated_at'], self._friend_item(f.get('status_updated_at') or ''))
                 self._set_activity_cells(row, f)
         self._update_presence_stats()
         self._update_uid_notice()
@@ -1019,7 +1082,7 @@ class MainWindow(QMainWindow):
         }
         for key, value in values.items():
             text = '；'.join(value) if isinstance(value, list) else str(value)
-            item = self._item(text)
+            item = self._friend_item(text)
             item.setToolTip(text)
             self.friends_table.setItem(row, _FRIEND_COL[key], item)
 
@@ -1029,7 +1092,7 @@ class MainWindow(QMainWindow):
         location = friend.get('location')
         if status == 'online' and location:
             text += '·'+location
-        item = self._item(text)
+        item = self._friend_item(text)
         if status == 'online':
             item.setForeground(QColor('#1a7f37'))
         return item
@@ -1125,6 +1188,11 @@ class MainWindow(QMainWindow):
 
     def _item(self, text: str) -> QTableWidgetItem:
         return QTableWidgetItem(text)
+
+    def _friend_item(self, text: str) -> QTableWidgetItem:
+        item = self._item(text)
+        item.setToolTip(item.text())
+        return item
 
     # ------------------------------------------------------------------
     # 手动修正
@@ -1397,7 +1465,7 @@ class EditFriendDialog(QDialog):
             self._nickname.setPlaceholderText('可留空保留图片；填写正确昵称后使用文字显示')
             preview = QLabel()
             preview.setObjectName('nicknameReviewImage')
-            preview.setPixmap(nickname_pixmap(friend.get('nickname_image'), 640, 64))
+            preview.setPixmap(nickname_pixmap(friend.get('nickname_image'), 640, 64, trim=True))
             preview.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             form.addRow('待核查截图:', preview)
         for field, label in (('nickname', '昵称'), ('signature', '签名')):
@@ -1410,7 +1478,7 @@ class EditFriendDialog(QDialog):
                 for index, item in enumerate(captures[:2]):
                     chooser.addItem(('最新' if index == 0 else '前一张')+' · '+str(item.get('observed_at') or ''))
                 def show_image(index, entries=captures, target=picture):
-                    target.setPixmap(nickname_pixmap(entries[index]['image'], 640, 72))
+                    target.setPixmap(nickname_pixmap(entries[index]['image'], 640, 72, trim=True))
                 chooser.currentIndexChanged.connect(show_image)
                 show_image(0)
                 form.addRow(label+'截图:', chooser)

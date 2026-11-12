@@ -437,6 +437,10 @@ class Scanner:
                     if self.on_result:
                         self.on_result(result)
                 except Exception as e:
+                    if isinstance(e, capture.CaptureError):
+                        # Geometry failures require user action, not a tight
+                        # continuous retry loop that keeps activating the game.
+                        self._active_stop().set()
                     self.db.mark_scan_failed()
                     self._missing_counts.clear()
                     logger.exception('扫描出错')

@@ -15,6 +15,16 @@ from app import capture
 
 
 class RoutingTests(unittest.TestCase):
+    def setUp(self):
+        # These tests explicitly exercise the experimental native route. Ordinary
+        # startup/default desktop routing is covered by test_capture_preflight.
+        enabled = patch.object(capture, 'experimental_window_capture_enabled', return_value=True)
+        geometry = patch('app.window.capture_rect_error', return_value=None)
+        enabled.start()
+        geometry.start()
+        self.addCleanup(enabled.stop)
+        self.addCleanup(geometry.stop)
+
     def test_identity_uses_window_target_but_explicit_capture_injection_wins(self):
         from app import account_identity as identity
         pixel = np.ones((100, 200, 3), np.uint8)

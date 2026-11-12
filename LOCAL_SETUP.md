@@ -19,9 +19,9 @@ py -3.13 -m venv .venv
 
 已有虚拟环境后，可双击 `start.bat`。普通扫描和 Excel 导出无需 MySQL。源码包不包含个人数据库、配置、虚拟环境和截图，首次启动会生成本地文件。
 
-当前修复分支的所有入口均检查管理员权限，需要时通过 Windows 提示请求提升；`start-admin.bat` 是显式管理员入口。取消授权后不会继续启动。程序不修改游戏文件、UAC 设置或系统策略。`start-verify-admin.bat` 的初始频率为空，之后仍可输入 `0` 或正数。
+所有入口均检查管理员权限，需要时通过 Windows 提示请求提升；`start-admin.bat` 是显式管理员入口。取消授权后不会继续启动。程序不修改游戏文件、UAC 设置或系统策略。`start-verify-admin.bat` 的初始频率为空，之后仍可输入 `0` 或正数。
 
-默认使用普通屏幕采集。`GFM_EXPERIMENTAL_WINDOW_CAPTURE=1` 仅供显式启用实验性窗口采集，不代表支持遮挡或最小化后的完整扫描；普通用户无需设置。当前源码候选与正式 Release 包的区别见 [验证记录](docs/VALIDATION-2026-11-12.md)。
+默认使用普通屏幕采集。`GFM_EXPERIMENTAL_WINDOW_CAPTURE=1` 仅供显式启用实验性窗口采集，不代表支持遮挡或最小化后的完整扫描；普通用户无需设置。当前版本打包说明见 [版本说明](docs/RELEASE_NOTES.md)，此前真实扫描证据见 [验证记录](docs/VALIDATION-2026-11-12.md)。
 
 所有启动方式都等待点击“快速扫描”，不会自动开始。
 

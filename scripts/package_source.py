@@ -21,6 +21,7 @@ ROOT_FILES = frozenset((
     'start-admin.bat', 'start-verify-admin.bat', 'requirements.txt',
     'requirements-local-lock.txt', 'config.example.json',
     'tests/fixtures/README.md',
+    'docs/VALIDATION-2026-11-12.md', 'docs/RELEASE_NOTES.md',
 ))
 
 

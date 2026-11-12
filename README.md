@@ -2,7 +2,7 @@
 
 **Genshin Friend Monitor** 是 Windows 本地工具，通过游戏画面截图和 OCR 记录好友资料、在线状态与千星奇域活动，支持账号隔离、人工校准以及 Excel / MySQL 导出。
 
-> 本分支是基于 v1.1.1 的未发布修复候选，内部版本号仍为 1.1.1。现有 Release ZIP 不包含本分支修复；本次未重新打包或发布。当前验证范围见 [修复候选验证记录](docs/VALIDATION-2026-11-12.md)。
+> 当前版本为 **v1.1.2**。本次修复与安装包验证范围见 [版本说明](docs/RELEASE_NOTES.md)，此前真实扫描证据见 [验证记录](docs/VALIDATION-2026-11-12.md)。v1.1.1 的旧 ZIP 不包含本次修复。
 
 程序通过鼠标、键盘操作可见的游戏界面；不读取游戏内存或好友存档，不接入游戏服务器接口。普通扫描在本地完成，只有主动执行 MySQL 导出时才会向配置的数据库发送好友记录。数据范围见 [隐私与数据说明](PRIVACY.md)。
 
@@ -10,7 +10,7 @@
 
 ## 安装与启动
 
-- Windows 便携包：从 [GitHub Release](https://github.com/goldlzh/GenshinFriendMonitor/releases/latest) 下载 `GenshinFriendMonitor-windows-x64-v1.1.1.zip`，解压到可写目录，运行 `GenshinFriendMonitor.exe`，无需安装 Python。也可从 [Gitee 发行版](https://gitee.com/DM233/test_ocr_genshin/releases/latest) 下载分段包，按发行说明合并后解压。不要直接在压缩包中运行；游戏以管理员身份启动时，需右键以管理员身份运行扫描器。
+- Windows 便携包：从 [GitHub Release](https://github.com/goldlzh/GenshinFriendMonitor/releases/latest) 下载 `GenshinFriendMonitor-windows-x64-v1.1.2.zip`，解压到可写目录，运行 `GenshinFriendMonitor.exe`，无需安装 Python。不要直接在压缩包中运行；Windows 会请求管理员授权。发布同时提供独立源码包及各 ZIP 的 SHA256 校验文件。Gitee 镜像可能尚未同步，请核对实际版本。
 - Windows 10 / 11，原神 PC 中文界面，建议窗口或无边框窗口模式。
 - 64 位 Python 3.10+；开发验证环境使用 Python 3.13。依赖清单见 [requirements.txt](requirements.txt)，已记录的依赖组合见 [requirements-local-lock.txt](requirements-local-lock.txt)。
 - 源码包不包含虚拟环境、个人配置、好友数据库、游戏字体或扫描截图。第一次使用需安装依赖。
@@ -32,7 +32,7 @@ py -3.13 -m venv .venv
 
 所有入口都等待用户手动开始。`--scan-once` 只将初始频率留空，不会锁定后续选择。首次运行自动生成 `config.json`、`data/` 和 `logs/`。修改源码后需关闭旧程序并重新启动。
 
-本修复分支所有入口均检查管理员权限；取消 Windows 授权时停止启动，不修改 UAC 或系统安全策略。实验性窗口采集仅供开发验证，需显式设置 `GFM_EXPERIMENTAL_WINDOW_CAPTURE=1`；它尚未通过完整遮挡扫描验收，失败不会静默切换采集方式。
+所有入口均检查管理员权限；取消 Windows 授权时停止启动，不修改 UAC 或系统安全策略。实验性窗口采集仅供开发验证，需显式设置 `GFM_EXPERIMENTAL_WINDOW_CAPTURE=1`；它尚未通过完整遮挡扫描验收，失败不会静默切换采集方式。
 
 完整安装和迁移方法见 [LOCAL_SETUP.md](LOCAL_SETUP.md)。
 

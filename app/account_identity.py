@@ -107,9 +107,9 @@ def verify_account_frame(image, expected_uid):
     return actual
 
 
-def read_current_account(rect, capture_fn=None, *, expected_uid=None, should_continue=None):
+def read_current_account(rect, capture_fn=None, *, expected_uid=None, should_continue=None, hwnd=None):
     """Require two consecutive fresh HUD reads; this function sends no game input."""
-    capture_fn = capture_fn or capture.capture_region
+    capture_fn = capture_fn or (lambda *bounds: capture.capture_window(hwnd, *bounds))
     previous = None
     for attempt in range(4):
         if should_continue is not None and not should_continue():

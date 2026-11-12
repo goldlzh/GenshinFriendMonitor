@@ -136,6 +136,8 @@ class AccountUiTests(unittest.TestCase):
         application = MagicMock()
         application.exec.return_value = 0
         with patch.object(main, 'enable_dpi_awareness'), \
+                patch.object(main, 'ensure_administrator', return_value=True), \
+                patch('app.capture.initialize_window_capture'), \
                 patch.object(main.sys, 'argv', ['main.py', '--scan-once']), \
                 patch('PySide6.QtWidgets.QApplication', return_value=application), \
                 patch.object(self.ui, 'MainWindow', return_value=window), \

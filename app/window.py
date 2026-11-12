@@ -82,6 +82,36 @@ def get_window_rect(hwnd: int) -> Optional[Rect]:
         return None
 
 
+def capture_rect_error(hwnd: int, rect: Rect) -> Optional[str]:
+    """Require a current, visible client fully inside one physical monitor.
+
+    Some game/UI layers clip at the monitor boundary even when a native capture
+    returns a full-sized non-black frame. Do not feed those partial clients to
+    OCR or navigation. Startup enables physical-pixel DPI awareness first.
+    """
+    try:
+        import win32api
+        import win32gui
+        if not hwnd or not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+            return '目标游戏窗口不可用，请重新查找游戏窗口'
+        if win32gui.IsIconic(hwnd):
+            return '游戏窗口已最小化，请恢复窗口后重试'
+        current = get_window_rect(hwnd)
+        if current is None:
+            return '无法核实游戏窗口位置，已停止采集'
+        if tuple(current) != tuple(rect):
+            return '游戏窗口位置或大小已改变，请重新查找窗口后重试'
+        left, top, right, bottom = rect
+        for handle, _, _ in win32api.EnumDisplayMonitors():
+            ml, mt, mr, mb = win32api.GetMonitorInfo(handle)['Monitor']
+            if ml <= left < right <= mr and mt <= top < bottom <= mb:
+                return None
+        return '游戏客户区未完整位于同一块屏幕内，已停止采集；请将整个游戏窗口移入屏幕后重试'
+    except Exception as error:
+        logger.warning('无法核实游戏客户区与屏幕边界 hwnd=%s: %s', hwnd, error)
+        return '无法核实游戏窗口与屏幕边界，已停止采集'
+
+
 def bring_to_front(hwnd: int) -> bool:
     """请求激活并核实结果；已经在前台时不再做多余的窗口操作。"""
     import win32con
@@ -116,6 +146,33 @@ def is_foreground(hwnd: int) -> bool:
         return bool(hwnd and win32gui.IsWindow(hwnd) and win32gui.GetForegroundWindow() == hwnd)
     except Exception:
         return False
+
+
+def point_input_error(hwnd: Optional[int], x=None, y=None) -> Optional[str]:
+    """Require the point's root window to be this exact input target.
+
+    With no coordinates, check the actual cursor after movement. GA_ROOT admits
+    child controls but deliberately does not follow popup ownership (GA_ROOTOWNER).
+    None is reserved for an explicitly selected manual desktop region.
+    """
+    if hwnd is None:
+        return None
+    import win32api
+    import win32gui
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return '目标游戏窗口已关闭，未发送鼠标输入'
+        if x is None and y is None:
+            x, y = win32api.GetCursorPos()
+        if x is None or y is None:
+            return '无法核实鼠标坐标，未发送鼠标输入'
+        hit = win32gui.WindowFromPoint((int(x), int(y)))
+        if not hit or win32gui.GetAncestor(hit, 2) != hwnd:  # GA_ROOT, not GA_ROOTOWNER
+            return '鼠标位置被其他窗口遮挡，未发送鼠标输入；请移开遮挡窗口'
+        return None
+    except Exception as error:
+        logger.warning('无法核实鼠标命中窗口 hwnd=%s: %s', hwnd, error)
+        return '无法核实鼠标命中窗口，未发送鼠标输入'
 
 
 def executable_path(hwnd: int) -> Optional[str]:

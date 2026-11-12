@@ -55,7 +55,8 @@ for pkg in ("rapidocr", "onnxruntime", "pyclipper", "cv2", "shapely", "omegaconf
     except Exception:
         pass
 
-hiddenimports += ["PIL", "win32gui", "win32api", "win32con", "win32process", "win32security"]
+hiddenimports += ["PIL", "win32gui", "win32api", "win32con", "win32process", "win32security",
+                  "PySide6.QtMultimedia"]
 datas += [("app/assets/chat_icon.png", "app/assets")]
 
 a = Analysis(
@@ -69,7 +70,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=["PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
               "PySide6.QtWebEngineQuick", "PySide6.QtQuick", "PySide6.QtQml",
-              "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets", "tkinter"],
+              "PySide6.QtMultimediaWidgets", "tkinter"],
     noarchive=False,
 )
 
@@ -95,6 +96,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,          # GUI 程序，不显示控制台（调试时可改为 True 查看输出）
+    uac_admin=True,         # Windows requests elevation before starting the EXE.
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

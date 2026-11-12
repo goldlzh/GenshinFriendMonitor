@@ -6,7 +6,7 @@ rapidocr>=3.9.0
 onnxruntime>=1.17.0
 
 # 图形界面
-PySide6>=6.5.0
+PySide6>=6.10.0
 
 # 屏幕截图
 mss>=9.0.1

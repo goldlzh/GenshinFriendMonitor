@@ -1,7 +1,7 @@
 """列表滚动模拟：支持两种方式翻动好友列表。
 
-1. wheel 模式（默认，推荐）：直接向目标窗口发送 WM_MOUSEWHEEL 消息，
-   不移动系统光标，规避合成拖动不被识别、以及 SetCursorPos 权限不足的问题。
+1. wheel 模式（默认，推荐）：在已核实的游戏命中位置发送滚轮事件。
+   移动光标失败时，仅在目标仍处于前台且命中位置无遮挡时使用 WM_MOUSEWHEEL。
 2. drag 模式（备用）：在列表锚点按住鼠标左键并垂直拖动。部分机器上
    云原神客户端用原始输入追踪物理鼠标，合成绝对跳转不会被识别为滑动。
 """
@@ -12,6 +12,17 @@ from typing import Callable, Optional, Tuple
 
 from app.config import CONFIG
 from app.logger import logger
+from app.window import point_input_error
+
+
+def _point_allowed(hwnd, *point):
+    from app import window
+    if hwnd is not None and not window.is_foreground(hwnd):
+        return False
+    problem = point_input_error(hwnd, *point)
+    if problem:
+        logger.warning('%s', problem)
+    return not problem
 
 
 def _anchor(rect: Tuple[int, int, int, int]) -> Tuple[int, int]:
@@ -36,7 +47,7 @@ def _move_to(cx: int, cy: int) -> bool:
 
 
 def _post_wheel(hwnd: int, cx: int, cy: int, delta: int) -> bool:
-    """直接向目标窗口发送 WM_MOUSEWHEEL（不移动光标，规避权限/焦点问题）。"""
+    """向调用方已核实前台和命中位置的目标窗口发送 WM_MOUSEWHEEL。"""
     import win32con
     try:
         import win32gui
@@ -60,17 +71,24 @@ def scroll_clicks(rect: Tuple[int, int, int, int], clicks: int,
         clicks = -clicks
     cx, cy = _anchor(rect)
     delta = clicks * 120
+    if not _point_allowed(hwnd, cx, cy):
+        return False
     if _move_to(cx, cy):
+        if not _point_allowed(hwnd):
+            return False
         try:
             win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
             return True
         except Exception as e:
             logger.warning('合成滚轮事件失败: %s', e)
-    return _post_wheel(hwnd, cx, cy, delta) if hwnd is not None else False
+    if hwnd is not None and _point_allowed(hwnd, cx, cy):
+        return _post_wheel(hwnd, cx, cy, delta)
+    return False
 
 
 def drag(rect: Tuple[int, int, int, int], dy: int,
-         should_stop: Optional[Callable[[], bool]] = None) -> bool:
+         should_stop: Optional[Callable[[], bool]] = None,
+         hwnd: Optional[int] = None) -> bool:
     """平滑拖动；停止、移动失败或异常时释放鼠标按钮。"""
     import win32api
     import win32con
@@ -79,18 +97,27 @@ def drag(rect: Tuple[int, int, int, int], dy: int,
     if should_stop is not None and should_stop():
         return False
     cx, cy = _anchor(rect)
+    if not _point_allowed(hwnd, cx, cy):
+        return False
     if not _move_to(cx, cy):
         return False
     pressed = False
     try:
         time.sleep(0.05)
+        if not _point_allowed(hwnd):
+            return False
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         pressed = True
         steps = max(1, abs(dy) // 12)
         for i in range(1, steps + 1):
             if should_stop is not None and should_stop():
                 return False
-            if not _move_to(cx, cy + int(dy * i / steps)):
+            destination = (cx, cy + int(dy * i / steps))
+            if not _point_allowed(hwnd) or not _point_allowed(hwnd, *destination):
+                return False
+            if not _move_to(*destination):
+                return False
+            if not _point_allowed(hwnd):
                 return False
             time.sleep(0.012)
         return True
@@ -99,7 +126,10 @@ def drag(rect: Tuple[int, int, int, int], dy: int,
         return False
     finally:
         if pressed:
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            try:
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            except Exception:
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
 
 def scroll_down(rect: Tuple[int, int, int, int], step: int = None,
@@ -112,7 +142,7 @@ def scroll_down(rect: Tuple[int, int, int, int], step: int = None,
         success = scroll_clicks(rect, -abs(step), hwnd=hwnd)
     else:
         pixels = max(60, int((rect[3] - rect[1]) * CONFIG.scroll_overlap_ratio))
-        success = drag(rect, -pixels, should_stop=should_stop)
+        success = drag(rect, -pixels, should_stop=should_stop, hwnd=hwnd)
     time.sleep(max(0, CONFIG.scroll_settle_seconds))
     return success
 
@@ -126,7 +156,7 @@ def scroll_to_top(rect: Tuple[int, int, int, int], times: int = 40,
         if CONFIG.scroll_mode == 'wheel':
             success = scroll_clicks(rect, 10, hwnd=hwnd)
         else:
-            success = drag(rect, CONFIG.drag_pixels, should_stop=should_stop)
+            success = drag(rect, CONFIG.drag_pixels, should_stop=should_stop, hwnd=hwnd)
         if not success:
             return False
         time.sleep(0.05)
@@ -159,9 +189,11 @@ def drag_client(rect, start, end, *, hwnd=None, should_stop=None) -> bool:
             raise game_input.InputError(problem)
     pressed = False
     try:
+        if not _point_allowed(hwnd, *source):
+            return False
         game_input.move_mouse(*source)
         time.sleep(.025)
-        if not allowed():
+        if not allowed() or not _point_allowed(hwnd):
             return False
         game_input.mouse_event(0x0002)
         pressed = True
@@ -174,12 +206,17 @@ def drag_client(rect, start, end, *, hwnd=None, should_stop=None) -> bool:
             # Ease in/out, followed by a stationary hold: no release velocity.
             t = i/steps
             t = t*t*(3-2*t)
-            game_input.move_mouse(round(source[0]+(target[0]-source[0])*t),
-                                  round(source[1]+(target[1]-source[1])*t))
+            destination = (round(source[0]+(target[0]-source[0])*t),
+                           round(source[1]+(target[1]-source[1])*t))
+            if not _point_allowed(hwnd) or not _point_allowed(hwnd, *destination):
+                return False
+            game_input.move_mouse(*destination)
+            if not _point_allowed(hwnd):
+                return False
             time.sleep(duration/steps)
         deadline = time.monotonic()+max(0., min(3., CONFIG.drag_hold_seconds))
         while time.monotonic() < deadline:
-            if not allowed():
+            if not allowed() or not _point_allowed(hwnd):
                 return False
             time.sleep(.01)
     finally:
@@ -188,8 +225,12 @@ def drag_client(rect, start, end, *, hwnd=None, should_stop=None) -> bool:
                 game_input.mouse_event(0x0004)
             except game_input.InputError:
                 game_input.mouse_event(0x0004)
-    if allowed():
-        game_input.move_mouse(*point((1860, 1000)))
+    park = point((1860, 1000))
+    if not allowed() or not _point_allowed(hwnd) or not _point_allowed(hwnd, *park):
+        return False
+    game_input.move_mouse(*park)
+    if not _point_allowed(hwnd):
+        return False
     time.sleep(max(0., CONFIG.fast_settle_seconds))
     return True
 

@@ -323,6 +323,20 @@ class QuickScanWorkflow(UidPass):
             # A measured overlapping slot can contain a blank name. This only
             # checks page continuity; resolve() still keeps identity unknown.
             return layout.visual_similarity(previous.avatar_image, current.avatar_image) >= .95
+        if (a and b and (a.nickname_pending or b.nickname_pending)
+                and nickname_ocr.whole_nickname_foreground_agrees(
+                    previous.name_image, current.name_image)):
+            # Pending text can recover as a measured overlapping card leaves
+            # the bottom fade. Reuse the card/field checks and account for all
+            # strokes instead of requiring the quick ink cutoff alone. Reuse
+            # the existing full-ink geometry/contrast representation: neither
+            # blank-tail shading nor stretching unequal crops proves identity.
+            images = layout.nickname_comparison_images(previous.name_image, current.name_image)
+            # This proves continuity of this slot, never a persistent UID binding.
+            if (images is not None and
+                    layout.same_person(previous, current,
+                        name_similarity=layout.visual_similarity(*images))):
+                return True
         return (layout.nickname_ink_similarity(previous.name_image, current.name_image) >= .97
                 and nickname_ocr.whole_nickname_foreground_agrees(previous.name_image, current.name_image)
                 and layout.visual_similarity(previous.avatar_image, current.avatar_image) >= .85)

@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, QObject, QTimer, Signal, QItemSelectionModel, QSize
-from PySide6.QtGui import QColor, QFont, QPixmap, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFont, QPixmap, QIcon, QKeySequence, QShortcut, QImage
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -44,6 +44,7 @@ from app.config import CONFIG, parse_scan_frequency
 from app.accounts import AccountStore
 from app.database import Database
 from app.logger import logger
+from app.privileges import is_administrator
 from app.scanner import ScanResult, Scanner
 from app.status_events import STATUS_CHANGE_LABELS, is_status_change
 from app.ui.region_selector import RegionSelector
@@ -63,11 +64,39 @@ _FRIEND_HEADERS = [
 _FRIEND_COL = {key: index for index, (key, _) in enumerate(_FRIEND_HEADERS)}
 
 
-def nickname_pixmap(data, width=260, height=38):
-    """Keep the complete nickname region, including meaningful blank characters."""
+def _trim_preview(pixmap):
+    """Remove only confident outer horizontal whitespace from a display copy."""
+    import numpy as np
+
+    image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
+    pixels = np.frombuffer(image.constBits(), dtype=np.uint8).reshape(
+        image.height(), image.bytesPerLine())[:, :image.width()*4].reshape(
+            image.height(), image.width(), 4)
+    if np.any(pixels[:, :, 3] < 250):
+        return pixmap
+    rgb = pixels[:, :, :3].astype(np.int16)
+    # A row-wise background tolerates the card's gentle vertical gradient.
+    background = np.median(rgb, axis=1, keepdims=True)
+    foreground = np.max(np.abs(rgb-background), axis=2) > 20
+    count = np.count_nonzero(foreground)
+    if count < 12 or count > foreground.size*.35:
+        return pixmap  # Blank, tiny/uncertain marks, or a decorated background.
+    xs = np.where(foreground)[1]
+    left, right = max(0, int(xs.min())-6), min(image.width(), int(xs.max())+7)
+    if right-left >= image.width()*.9:
+        return pixmap
+    # Keep all vertical pixels and internal spacing, including detached marks.
+    return pixmap.copy(left, 0, right-left, image.height())
+
+
+def nickname_pixmap(data, width=260, height=38, *, trim=False):
+    """Render a bounded preview; original bytes and raw-view behavior stay intact."""
     pixmap = QPixmap()
     if not data or not pixmap.loadFromData(data):
         return pixmap
+    if trim:
+        pixmap = _trim_preview(pixmap)
+        width, height = min(width, pixmap.width()), min(height, pixmap.height())
     return pixmap.scaled(QSize(width, height), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
@@ -96,6 +125,7 @@ def _fmt_duration(secs) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._administrator = is_administrator()
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(760, 480)
         self.resize(1040, 700)
@@ -157,6 +187,13 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
+        self.admin_warning = QLabel('当前未以管理员身份运行：游戏扫描、初始化档案和账号识别已禁用。'
+                                    '可浏览已有档案和导出；请关闭后以管理员身份重新启动。')
+        self.admin_warning.setWordWrap(True)
+        self.admin_warning.setStyleSheet('color: #8b1d13; background: #fff0dc; border: 2px solid #c23b22; '
+                                        'font-weight: bold; padding: 8px;')
+        self.admin_warning.setVisible(not self._administrator)
+        root.addWidget(self.admin_warning)
         root.addWidget(self._build_control_panel())
         root.addWidget(self._build_stats_panel())
         self.phase_label = QLabel('等待快速扫描')
@@ -178,9 +215,13 @@ class MainWindow(QMainWindow):
         self.friends_table.cellDoubleClicked.connect(
             lambda row, column: self._edit_friend(row) if column in (_FRIEND_COL['nickname'], _FRIEND_COL['signature']) else None)
         self.friends_table.setIconSize(QSize(260, 38))
+        self.friends_table.setWordWrap(False)
         # Keep columns readable on a narrow monitor; additional history scrolls
         # horizontally instead of squeezing both levels and tags into tiny cells.
         self.friends_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.friends_table.horizontalHeader().setMinimumSectionSize(44)
+        self.friends_table.horizontalHeader().setTextElideMode(Qt.ElideRight)
+        self._auto_friend_column_widths = {}
         widths = dict(uid=100, nickname=280, level=80, qianxing_level=80, tags=140,
                       signature=260, qianxing_activity=190, qianxing_activity_summary=230,
                       qianxing_activity_ranges=260,
@@ -188,6 +229,8 @@ class MainWindow(QMainWindow):
                       today_ranges=150, status_updated_at=155, last_seen=115, profile=86)
         for key, width in widths.items():
             self.friends_table.setColumnWidth(_FRIEND_COL[key], width)
+        for column, (_, label) in enumerate(_FRIEND_HEADERS):
+            self.friends_table.horizontalHeaderItem(column).setToolTip(label)
         self.friends_table.horizontalHeaderItem(_FRIEND_COL['level']).setToolTip('普通好友界面的冒险等级')
         self.friends_table.horizontalHeaderItem(_FRIEND_COL['qianxing_level']).setToolTip('千星奇域界面的千星等级，与冒险等级分别保存')
         self.friends_table.horizontalHeaderItem(_FRIEND_COL['tags']).setToolTip('千星奇域好友标签；完整内容也可在编辑窗口查看')
@@ -286,7 +329,8 @@ class MainWindow(QMainWindow):
         self.pause_btn.clicked.connect(self._toggle_pause)
         grid.addWidget(self.pause_btn, 0, 6)
 
-        self.uid_btn = QPushButton("识别全部UID")
+        self.uid_btn = QPushButton("初始化档案")
+        self.uid_btn.setToolTip("首次完整 UID 建档；也可补全或重新核验所有好友 UID，耗时较长。不会清空已有档案。")
         self.uid_btn.clicked.connect(self._toggle_uid_scan)
         grid.addWidget(self.uid_btn, 0, 7)
 
@@ -447,7 +491,7 @@ class MainWindow(QMainWindow):
     def _sync_task_controls(self) -> None:
         busy = self._task_busy()
         self.account_combo.setEnabled(not busy)
-        self.detect_account_btn.setEnabled(not busy)
+        self.detect_account_btn.setEnabled(self._administrator and not busy)
         self.import_legacy_btn.setEnabled(not busy and bool(self._account_uid))
         self.window_combo.setEnabled(not busy)
         self.find_btn.setEnabled(not busy)
@@ -456,9 +500,11 @@ class MainWindow(QMainWindow):
         self.online_only_checkbox.setEnabled(not busy)
         self.save_profile_checkbox.setEnabled(not busy)
         allowed = bool(self._account_uid) or self.db._path == ':memory:'
-        self.start_btn.setEnabled(allowed and not self._account_reading and not self.scanner.is_uid_scanning
+        self.start_btn.setEnabled(self._administrator and allowed and not self._account_reading and not self.scanner.is_uid_scanning
                                  and not self._profile_importing)
-        self.uid_btn.setEnabled(allowed and not self._account_reading and not self._profile_importing)
+        self.uid_btn.setEnabled(self._administrator and allowed and not self._account_reading and not self._profile_importing)
+        if not self._administrator:
+            self.pause_btn.setEnabled(False)
         self.paste_profile_btn.setEnabled(bool(self._account_uid) and not busy)
         self.profile_paste_shortcut.setEnabled(bool(self._account_uid) and not busy)
 
@@ -520,10 +566,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, '无法切换账号', str(error))
 
     def _detect_account(self) -> None:
-        if self._task_busy():
+        if not self._require_administrator() or self._task_busy():
             return
         hwnd = self.window_combo.currentData()
         rect = self._manual_rect
+        if rect is not None:
+            hwnd = None
         if rect is None and hwnd is not None:
             rect = win32window.get_window_rect(hwnd)
         if not rect:
@@ -539,7 +587,7 @@ class MainWindow(QMainWindow):
         def read_identity():
             try:
                 from app.account_identity import read_current_account
-                result = (read_current_account(rect), None)
+                result = (read_current_account(rect, hwnd=hwnd), None)
             except Exception as error:
                 result = (None, str(error))
             self.bridge.account_identity.emit(result)
@@ -595,6 +643,12 @@ class MainWindow(QMainWindow):
         if self._account_uid or self.db._path == ':memory:':
             return True
         QMessageBox.warning(self, '请先选择账号', '请点击「识别当前账号」读取游戏右下角 UID，再选择该账号点击「快速扫描」。旧数据不会自动归属新账号。')
+        return False
+
+    def _require_administrator(self) -> bool:
+        if self._administrator:
+            return True
+        QMessageBox.warning(self, '需要管理员权限', self.admin_warning.text())
         return False
 
     def _find_windows(self) -> None:
@@ -672,6 +726,8 @@ class MainWindow(QMainWindow):
 
     def _yield_to_game(self) -> None:
         """仍持有用户按钮焦点时交接给游戏，默认保留监控窗口。"""
+        if not self._require_administrator():
+            return
         # 最小化之后再等工作线程的倒计时结束，可能已经失去 Windows
         # 允许切换前台窗口的条件。正常激活请求应在按钮处理期间立即发出。
         # 工作线程仍会独立核验前台状态，激活失败不会发送游戏输入。
@@ -692,7 +748,7 @@ class MainWindow(QMainWindow):
             self.pause_btn.setEnabled(False)
             self._sync_task_controls()
             return
-        if self._account_reading or not self._require_account():
+        if not self._require_administrator() or self._account_reading or not self._require_account():
             return
         try:
             frequency = parse_scan_frequency(self.frequency_edit.text())
@@ -730,6 +786,8 @@ class MainWindow(QMainWindow):
 
     def _toggle_pause(self) -> None:
         """暂停/继续扫描。扫描中按 ESC 键也可切换暂停。"""
+        if not self._require_administrator():
+            return
         if not (self.scanner.is_running or self.scanner.is_uid_scanning):
             self.pause_btn.setEnabled(False)
             self.pause_btn.setText("暂停")
@@ -740,12 +798,12 @@ class MainWindow(QMainWindow):
             self._yield_to_game()
 
     def _toggle_uid_scan(self) -> None:
-        """手动触发「识别全部好友 UID」：点好友头像 → 查看资料 → 读 UID。"""
+        """初始化或补全档案：点好友头像 → 查看资料 → 读全部好友 UID。"""
         if self.scanner.is_uid_scanning:
             self.scanner.stop()
             self.uid_btn.setEnabled(False)
             return
-        if self._account_reading or not self._require_account():
+        if not self._require_administrator() or self._account_reading or not self._require_account():
             return
         hwnd = self.window_combo.currentData()
         if hwnd is None and self._manual_rect is None:
@@ -766,6 +824,7 @@ class MainWindow(QMainWindow):
         ret = QMessageBox.question(
             self,
             "确认",
+            "用于首次完整建档，也可补全或重新核验已有档案，不会清空已有档案。\n"
             "将滚动好友列表，逐个点击好友头像打开资料卡识别 UID。\n"
             "开始后请在准备期间切回游戏，正式识别时勿操作鼠标/键盘。是否开始？",
             QMessageBox.Yes | QMessageBox.No,
@@ -793,7 +852,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(500, self._check_uid_scan_done)
             return
         self.uid_btn.setEnabled(True)
-        self.uid_btn.setText("识别全部UID")
+        self.uid_btn.setText("初始化档案")
         self.start_btn.setEnabled(True)
         self.start_btn.setText("快速扫描")
         self.select_region_btn.setEnabled(True)
@@ -871,13 +930,13 @@ class MainWindow(QMainWindow):
         self._friends_cache = friends
         columns = _FRIEND_COL
         for row, f in enumerate(friends):
-            self.friends_table.setItem(row, columns['uid'], self._item(f.get("uid") or ""))
-            name_item = self._item(f.get("nickname") or "")
+            self.friends_table.setItem(row, columns['uid'], self._friend_item(f.get("uid") or ""))
+            name_item = self._friend_item(f.get("nickname") or "")
             if f.get('nickname_pending'):
-                pixmap = nickname_pixmap(self.db.get_nickname_image(f['id']))
+                pixmap = nickname_pixmap(self.db.get_nickname_image(f['id']), width=200, trim=True)
                 name_item.setText('' if not pixmap.isNull() else '待核查（截图不可用）')
                 name_item.setIcon(QIcon(pixmap))
-                hint = '昵称待人工核查，完整截图保留空白及特殊字符。可一直以图片显示；双击可查看或填写昵称。'
+                hint = '昵称待人工核查，预览仅裁去外围留白，原始截图及内部空白、特殊字符仍保留。双击可查看或填写昵称。'
                 if f.get('identity_review_reason'):
                     hint = f['identity_review_reason']+'。'+hint
                 name_item.setToolTip(hint)
@@ -886,17 +945,17 @@ class MainWindow(QMainWindow):
             else:
                 self.friends_table.setRowHeight(row, self.friends_table.verticalHeader().defaultSectionSize())
             self.friends_table.setItem(row, columns['nickname'], name_item)
-            self.friends_table.setItem(row, columns['level'], self._item(str(f.get("level") or "")))
+            self.friends_table.setItem(row, columns['level'], self._friend_item(str(f.get("level") or "")))
             qianxing_level = f.get('qianxing_level')
             self.friends_table.setItem(row, columns['qianxing_level'],
-                                       self._item('' if qianxing_level is None else str(qianxing_level)))
-            tag_item = self._item(f.get('tags') or '')
+                                       self._friend_item('' if qianxing_level is None else str(qianxing_level)))
+            tag_item = self._friend_item(f.get('tags') or '')
             tag_item.setToolTip(f.get('tags') or '')
             self.friends_table.setItem(row, columns['tags'], tag_item)
-            signature_item = self._item(f.get('signature') or '')
+            signature_item = self._friend_item(f.get('signature') or '')
             if f.get('signature_pending'):
                 captures = self.db.get_field_captures(f['id'], 'signature')
-                pixmap = nickname_pixmap(captures[0]['image'] if captures else None)
+                pixmap = nickname_pixmap(captures[0]['image'] if captures else None, trim=True)
                 signature_item.setText('' if not pixmap.isNull() else '签名待校准')
                 signature_item.setIcon(QIcon(pixmap))
                 signature_item.setBackground(QColor('#fff2d5'))
@@ -907,23 +966,52 @@ class MainWindow(QMainWindow):
             self.friends_table.setItem(row, columns['signature'], signature_item)
             self._set_activity_cells(row, f)
             self.friends_table.setItem(row, columns['status'], self._status_item(f))
-            self.friends_table.setItem(row, columns['online_duration'], self._item(_fmt_duration(self._online_secs(f))))
-            self.friends_table.setItem(row, columns['cumulative_duration'], self._item(_fmt_duration(self._cumulative_secs(f))))
-            self.friends_table.setItem(row, columns['today_ranges'], self._item(self._today_ranges(f)))
-            self.friends_table.setItem(row, columns['status_updated_at'], self._item(f.get("status_updated_at") or ""))
-            self.friends_table.setItem(row, columns['last_seen'], self._item(f.get("last_seen") or ""))
+            self.friends_table.setItem(row, columns['online_duration'], self._friend_item(_fmt_duration(self._online_secs(f))))
+            self.friends_table.setItem(row, columns['cumulative_duration'], self._friend_item(_fmt_duration(self._cumulative_secs(f))))
+            self.friends_table.setItem(row, columns['today_ranges'], self._friend_item(self._today_ranges(f)))
+            self.friends_table.setItem(row, columns['status_updated_at'], self._friend_item(f.get("status_updated_at") or ""))
+            self.friends_table.setItem(row, columns['last_seen'], self._friend_item(f.get("last_seen") or ""))
             profile_btn = QPushButton('查看主页')
             profile_btn.setToolTip('查看最近保留的两张好友主页截图；未保存截图时显示待采集')
             profile_btn.clicked.connect(lambda checked=False, fid=f['id']: self._show_profile_captures(fid))
             self.friends_table.setCellWidget(row, columns['profile'], profile_btn)
+        self._compact_friend_columns()
         self._update_uid_notice()
+
+    def _compact_friend_columns(self) -> None:
+        """Fit useful content within caps, retaining widths resized by the user."""
+        table = self.friends_table
+        metrics = table.fontMetrics()
+        caps = dict(uid=110, nickname=220, level=88, qianxing_level=88, tags=140,
+                    signature=280, status=120, qianxing_activity=180,
+                    qianxing_activity_summary=140, qianxing_activity_ranges=180,
+                    online_duration=120, cumulative_duration=120, today_ranges=180,
+                    status_updated_at=160, last_seen=130, profile=100)
+        for column, (key, label) in enumerate(_FRIEND_HEADERS):
+            previous = self._auto_friend_column_widths.get(column)
+            if previous is not None and table.columnWidth(column) != previous:
+                continue
+            width = max(44, min(88, metrics.horizontalAdvance(label)+18))
+            for row in range(table.rowCount()):
+                item = table.item(row, column)
+                if item is not None:
+                    content = metrics.horizontalAdvance(item.text())
+                    if not item.icon().isNull():
+                        content += item.icon().actualSize(table.iconSize()).width()+4
+                    width = max(width, content+16)
+                widget = table.cellWidget(row, column)
+                if widget is not None:
+                    width = max(width, widget.sizeHint().width()+8)
+            width = min(caps[key], width)
+            table.setColumnWidth(column, width)
+            self._auto_friend_column_widths[column] = table.columnWidth(column)
 
     def _update_uid_notice(self) -> None:
         rows = self.db.get_display_friends()
         missing = sum(re.fullmatch(r'[0-9]{9}', str(row.get('uid') or '')) is None for row in rows)
         self.uid_notice.setText(
             '提示：当前名单有 %d 位好友尚未录入 UID，可能导致身份匹配及统计不准确。'
-            '可继续快速扫描，也可点击“识别全部UID”补全。' % missing if missing else '')
+            '可继续快速扫描，也可点击“初始化档案”完整补全 UID。' % missing if missing else '')
         self.uid_notice.setVisible(bool(missing))
 
     def _show_profile_captures(self, fid: int) -> None:
@@ -996,10 +1084,10 @@ class MainWindow(QMainWindow):
             self._friends_cache = friends
             for row, f in enumerate(friends):
                 self.friends_table.setItem(row, _FRIEND_COL['status'], self._status_item(f))
-                self.friends_table.setItem(row, _FRIEND_COL['online_duration'], self._item(_fmt_duration(self._online_secs(f))))
-                self.friends_table.setItem(row, _FRIEND_COL['cumulative_duration'], self._item(_fmt_duration(self._cumulative_secs(f))))
-                self.friends_table.setItem(row, _FRIEND_COL['today_ranges'], self._item(self._today_ranges(f)))
-                self.friends_table.setItem(row, _FRIEND_COL['status_updated_at'], self._item(f.get('status_updated_at') or ''))
+                self.friends_table.setItem(row, _FRIEND_COL['online_duration'], self._friend_item(_fmt_duration(self._online_secs(f))))
+                self.friends_table.setItem(row, _FRIEND_COL['cumulative_duration'], self._friend_item(_fmt_duration(self._cumulative_secs(f))))
+                self.friends_table.setItem(row, _FRIEND_COL['today_ranges'], self._friend_item(self._today_ranges(f)))
+                self.friends_table.setItem(row, _FRIEND_COL['status_updated_at'], self._friend_item(f.get('status_updated_at') or ''))
                 self._set_activity_cells(row, f)
         self._update_presence_stats()
         self._update_uid_notice()
@@ -1017,7 +1105,7 @@ class MainWindow(QMainWindow):
         }
         for key, value in values.items():
             text = '；'.join(value) if isinstance(value, list) else str(value)
-            item = self._item(text)
+            item = self._friend_item(text)
             item.setToolTip(text)
             self.friends_table.setItem(row, _FRIEND_COL[key], item)
 
@@ -1027,7 +1115,7 @@ class MainWindow(QMainWindow):
         location = friend.get('location')
         if status == 'online' and location:
             text += '·'+location
-        item = self._item(text)
+        item = self._friend_item(text)
         if status == 'online':
             item.setForeground(QColor('#1a7f37'))
         return item
@@ -1123,6 +1211,11 @@ class MainWindow(QMainWindow):
 
     def _item(self, text: str) -> QTableWidgetItem:
         return QTableWidgetItem(text)
+
+    def _friend_item(self, text: str) -> QTableWidgetItem:
+        item = self._item(text)
+        item.setToolTip(item.text())
+        return item
 
     # ------------------------------------------------------------------
     # 手动修正
@@ -1395,7 +1488,7 @@ class EditFriendDialog(QDialog):
             self._nickname.setPlaceholderText('可留空保留图片；填写正确昵称后使用文字显示')
             preview = QLabel()
             preview.setObjectName('nicknameReviewImage')
-            preview.setPixmap(nickname_pixmap(friend.get('nickname_image'), 640, 64))
+            preview.setPixmap(nickname_pixmap(friend.get('nickname_image'), 640, 64, trim=True))
             preview.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             form.addRow('待核查截图:', preview)
         for field, label in (('nickname', '昵称'), ('signature', '签名')):
@@ -1408,7 +1501,7 @@ class EditFriendDialog(QDialog):
                 for index, item in enumerate(captures[:2]):
                     chooser.addItem(('最新' if index == 0 else '前一张')+' · '+str(item.get('observed_at') or ''))
                 def show_image(index, entries=captures, target=picture):
-                    target.setPixmap(nickname_pixmap(entries[index]['image'], 640, 72))
+                    target.setPixmap(nickname_pixmap(entries[index]['image'], 640, 72, trim=True))
                 chooser.currentIndexChanged.connect(show_image)
                 show_image(0)
                 form.addRow(label+'截图:', chooser)

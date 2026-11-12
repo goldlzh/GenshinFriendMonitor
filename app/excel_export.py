@@ -37,7 +37,7 @@ def export_friends_to_excel(friends: List[dict], events: List[dict],
     os.makedirs(dest_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     account_prefix = f'{account_uid}_' if account_uid is not None else ''
-    path = os.path.join(dest_dir, f"原神好友统计_{account_prefix}{stamp}.xlsx")
+    basename = f"原神好友统计_{account_prefix}{stamp}"
 
     wb = Workbook()
 
@@ -98,7 +98,32 @@ def export_friends_to_excel(friends: List[dict], events: List[dict],
     for col_idx in range(1, len(ev_headers) + 1):
         ws2.column_dimensions[get_column_letter(col_idx)].width = 20
 
-    wb.save(path)
+    # All exported strings are user data, including text beginning with '=' or '#N/A'.
+    # Keep the original value while preventing openpyxl's formula/error inference.
+    for sheet in wb:
+        for row in sheet:
+            for cell in row:
+                if isinstance(cell.value, str):
+                    cell.data_type = 's'
+
+    # Exclusive creation also protects simultaneous exports and existing files.
+    suffix = 0
+    while True:
+        tail = f"_{suffix}" if suffix else ""
+        path = os.path.join(dest_dir, f"{basename}{tail}.xlsx")
+        try:
+            stream = open(path, 'xb')
+        except FileExistsError:
+            suffix += 1
+            continue
+        break
+    try:
+        with stream:
+            wb.save(stream)
+    except Exception:
+        # Only remove the new incomplete file reserved by this export.
+        os.unlink(path)
+        raise
     logger.info("已导出 Excel: %s", path)
     return path
 

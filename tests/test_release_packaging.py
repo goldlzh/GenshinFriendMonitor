@@ -10,6 +10,38 @@ from scripts.package_windows import package as package_windows
 
 
 class SourcePackageTests(unittest.TestCase):
+    def test_source_includes_allowlisted_validation_docs_not_private_reports(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            public = ('docs/VALIDATION-2026-11-12.md', 'docs/RELEASE_NOTES.md')
+            for name in (*public, 'docs/private-player-report.md'):
+                path = root/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('PRIVATE_SENTINEL' if name.endswith('private-player-report.md') else 'public validation')
+            archive, _, _ = package(root, root/'dist', version='1.1.2')
+            with zipfile.ZipFile(archive) as bundle:
+                names = {name.split('/', 1)[1] for name in bundle.namelist()}
+                self.assertTrue(set(public).issubset(names))
+                self.assertNotIn('docs/private-player-report.md', names)
+
+    def test_windows_includes_install_and_public_validation_docs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            binary = root/'app.exe'
+            binary.write_bytes(b'MZ_SYNTHETIC_TEST_EXECUTABLE')
+            public = ('README.md', 'PRIVACY.md', 'CHANGELOG.md', 'FEATURE_STATUS.md',
+                      'LOCAL_SETUP.md', 'docs/VALIDATION-2026-11-12.md', 'docs/RELEASE_NOTES.md')
+            for name in (*public, 'docs/private-player-report.md'):
+                path = root/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('PRIVATE_SENTINEL' if name.endswith('private-player-report.md') else 'public')
+            with patch('scripts.package_windows.dependency_licenses', return_value={'package/LICENSE': b'license'}):
+                result = package_windows(root, binary, root/'dist', version='1.1.2')
+            with zipfile.ZipFile(root/'dist'/result['archive']) as bundle:
+                names = {name.split('/', 1)[1] for name in bundle.namelist()}
+                self.assertTrue(set(public).issubset(names))
+                self.assertNotIn('docs/private-player-report.md', names)
+
     def test_allowlist_excludes_runtime_and_git_even_when_present(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

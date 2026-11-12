@@ -43,18 +43,23 @@ def package(root, binary, output, *, version):
             raise ValueError('Executable does not have a Windows PE header')
     docs = {name: (root/name).read_bytes() for name in
             ('README.md', 'PRIVACY.md', 'CHANGELOG.md', 'FEATURE_STATUS.md')}
+    for name in ('LOCAL_SETUP.md', 'docs/VALIDATION-2026-11-12.md', 'docs/RELEASE_NOTES.md'):
+        if (root/name).is_file():
+            docs[name] = (root/name).read_bytes()
     licenses = dependency_licenses(root/'requirements-local-lock.txt')
     if not licenses:
         raise ValueError('Dependency license texts were not found')
     readme = f'''原神好友状态监测器 v{version}
 
 Windows 10/11 x64 便携包。解压到可写目录后运行 GenshinFriendMonitor.exe。
-无需安装 Python，请勿在压缩包内直接运行。游戏以管理员身份运行时，
-请右键以管理员身份运行扫描器；普通情况下直接运行即可。
+无需安装 Python，请勿在压缩包内直接运行。直接运行会由 Windows 请求
+管理员授权；取消授权则停止启动，不修改系统安全策略。
 
-游戏须为完整的 16:9 客户区，不含标题栏。启动后不会自动扫描。
+游戏须为完整的 16:9 客户区，不含标题栏，整个客户区位于同一屏幕内、
+无遮挡且不最小化。默认普通屏幕采集；遮挡采集仍为实验功能。
+启动后不会自动扫描。
 先查找游戏窗口并识别当前账号，再手动开始。
-首次可以直接识别全部 UID，也可先快速扫描后补录。
+首次可以点击“初始化档案”完整识别 UID，也可先快速扫描后补录。
 UID 未齐只提示可能影响统计，不强制识别。
 频率留空单次，0 连续，正数为分钟间隔；只有填写频率才持续累计时长。
 
@@ -68,7 +73,8 @@ UID 未齐只提示可能影响统计，不强制识别。
 首次已在线不会记为刚上线，但按扫描频率正常统计在线时段。
 减少的好友可勾选“显示历史档案”查看资料；删除判断需要完整扫描。
 
-依赖许可见 THIRD_PARTY_LICENSES，功能限制见 FEATURE_STATUS.md。
+依赖许可见 THIRD_PARTY_LICENSES，功能限制见 FEATURE_STATUS.md，
+本次版本说明见 docs/RELEASE_NOTES.md。
 '''
     output.mkdir(parents=True, exist_ok=True)
     archive = output/f'GenshinFriendMonitor-windows-x64-v{version}.zip'

@@ -2,6 +2,7 @@
 from tests import test_regressions as _baseline
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -120,6 +121,86 @@ class AccountExportTests(unittest.TestCase):
                 self.assertEqual(('千星等级', '标签'), tuple(next(workbook['好友信息'].values))[-5:-3])
             finally:
                 workbook.close()
+
+    def test_same_second_excel_exports_preserve_every_existing_file(self):
+        for owner in (None, OWNER_A):
+            with self.subTest(owner=owner), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(excel_export, 'datetime') as clock:
+                clock.now.return_value.strftime.return_value = '20260920_100000'
+                prefix = f'{owner}_' if owner else ''
+                existing = Path(directory) / f'原神好友统计_{prefix}20260920_100000.xlsx'
+                existing.write_bytes(b'previous export must remain unchanged')
+                paths = [Path(excel_export.export_friends_to_excel(
+                    [{'uid': FRIEND, 'nickname': nickname}], [], directory, account_uid=owner))
+                    for nickname in ('first', 'second')]
+                self.assertEqual(3, len({existing, *paths}))
+                self.assertEqual(b'previous export must remain unchanged', existing.read_bytes())
+                for path, nickname in zip(paths, ('first', 'second')):
+                    workbook = load_workbook(path, read_only=True)
+                    try:
+                        column = 3 if owner else 2
+                        self.assertEqual(nickname, workbook['好友信息'].cell(2, column).value)
+                    finally:
+                        workbook.close()
+
+    def test_excel_user_text_is_literal_in_both_sheets(self):
+        friend = {'uid': FRIEND, 'nickname': '=1+1', 'signature': '=TEST("中文🙂")\n第二行',
+                  'location': '#N/A', 'tags': '=HYPERLINK("https://example.invalid")',
+                  'level': 0, 'qianxing_level': 0}
+        events = [{'uid': FRIEND, 'nickname': '=1+1', 'event_type': 'online',
+                   'event_time': NOW}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = excel_export.export_friends_to_excel([friend], events, directory, account_uid=OWNER_A)
+            workbook = load_workbook(path, read_only=True, data_only=False)
+            try:
+                for coordinate, value in [('C2', friend['nickname']), ('E2', friend['signature']),
+                                          ('G2', friend['location']), ('O2', friend['tags'])]:
+                    cell = workbook['好友信息'][coordinate]
+                    self.assertEqual(value, cell.value)
+                    self.assertEqual('s', cell.data_type)
+                self.assertEqual(0, workbook['好友信息']['D2'].value)
+                self.assertEqual('n', workbook['好友信息']['D2'].data_type)
+                self.assertEqual(0, workbook['好友信息']['N2'].value)
+                event_nickname = workbook['状态变动']['D2']
+                self.assertEqual(friend['nickname'], event_nickname.value)
+                self.assertEqual('s', event_nickname.data_type)
+                self.assertFalse(any(cell.data_type in ('f', 'e') for sheet in workbook
+                                     for row in sheet for cell in row))
+            finally:
+                workbook.close()
+
+    def test_simultaneous_excel_exports_keep_separate_workbooks(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(excel_export, 'datetime') as clock:
+            clock.now.return_value.strftime.return_value = '20260920_100000'
+            def export(index):
+                return excel_export.export_friends_to_excel(
+                    [{'uid': FRIEND, 'nickname': f'export-{index}'}], [], directory, account_uid=OWNER_A)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                paths = list(pool.map(export, range(4)))
+            self.assertEqual(4, len(set(paths)))
+            for index, path in enumerate(paths):
+                workbook = load_workbook(path, read_only=True)
+                try:
+                    self.assertEqual(f'export-{index}', workbook['好友信息']['C2'].value)
+                finally:
+                    workbook.close()
+
+    def test_failed_excel_save_preserves_previous_export_and_removes_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(excel_export, 'datetime') as clock:
+            clock.now.return_value.strftime.return_value = '20260920_100000'
+            original = Path(excel_export.export_friends_to_excel([], [], directory, account_uid=OWNER_A))
+            original_bytes = original.read_bytes()
+            def fail_save(workbook, target):
+                if hasattr(target, 'write'):
+                    target.write(b'incomplete workbook')
+                else:
+                    Path(target).write_bytes(b'incomplete workbook')
+                raise OSError('synthetic disk failure')
+            with patch('openpyxl.workbook.workbook.Workbook.save', new=fail_save), \
+                    self.assertRaisesRegex(OSError, 'synthetic disk failure'):
+                excel_export.export_friends_to_excel([], [], directory, account_uid=OWNER_A)
+            self.assertEqual(original_bytes, original.read_bytes())
+            self.assertEqual([original], list(Path(directory).glob('*.xlsx')))
 
     def test_invalid_owner_uid_is_rejected_before_export(self):
         for owner in ('', '../111111111', '123', 111111111):

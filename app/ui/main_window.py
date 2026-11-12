@@ -286,7 +286,8 @@ class MainWindow(QMainWindow):
         self.pause_btn.clicked.connect(self._toggle_pause)
         grid.addWidget(self.pause_btn, 0, 6)
 
-        self.uid_btn = QPushButton("识别全部UID")
+        self.uid_btn = QPushButton("初始化档案")
+        self.uid_btn.setToolTip("首次完整 UID 建档；也可补全或重新核验所有好友 UID，耗时较长。不会清空已有档案。")
         self.uid_btn.clicked.connect(self._toggle_uid_scan)
         grid.addWidget(self.uid_btn, 0, 7)
 
@@ -740,7 +741,7 @@ class MainWindow(QMainWindow):
             self._yield_to_game()
 
     def _toggle_uid_scan(self) -> None:
-        """手动触发「识别全部好友 UID」：点好友头像 → 查看资料 → 读 UID。"""
+        """初始化或补全档案：点好友头像 → 查看资料 → 读全部好友 UID。"""
         if self.scanner.is_uid_scanning:
             self.scanner.stop()
             self.uid_btn.setEnabled(False)
@@ -766,6 +767,7 @@ class MainWindow(QMainWindow):
         ret = QMessageBox.question(
             self,
             "确认",
+            "用于首次完整建档，也可补全或重新核验已有档案，不会清空已有档案。\n"
             "将滚动好友列表，逐个点击好友头像打开资料卡识别 UID。\n"
             "开始后请在准备期间切回游戏，正式识别时勿操作鼠标/键盘。是否开始？",
             QMessageBox.Yes | QMessageBox.No,
@@ -793,7 +795,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(500, self._check_uid_scan_done)
             return
         self.uid_btn.setEnabled(True)
-        self.uid_btn.setText("识别全部UID")
+        self.uid_btn.setText("初始化档案")
         self.start_btn.setEnabled(True)
         self.start_btn.setText("快速扫描")
         self.select_region_btn.setEnabled(True)
@@ -923,7 +925,7 @@ class MainWindow(QMainWindow):
         missing = sum(re.fullmatch(r'[0-9]{9}', str(row.get('uid') or '')) is None for row in rows)
         self.uid_notice.setText(
             '提示：当前名单有 %d 位好友尚未录入 UID，可能导致身份匹配及统计不准确。'
-            '可继续快速扫描，也可点击“识别全部UID”补全。' % missing if missing else '')
+            '可继续快速扫描，也可点击“初始化档案”完整补全 UID。' % missing if missing else '')
         self.uid_notice.setVisible(bool(missing))
 
     def _show_profile_captures(self, fid: int) -> None:

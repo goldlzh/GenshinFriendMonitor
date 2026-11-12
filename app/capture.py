@@ -2,14 +2,53 @@
 from __future__ import annotations
 
 from typing import Optional
+import threading
 
 import numpy as np
 
 from app.logger import logger
 
+_target = threading.local()
+_window_broker = None
+
+
+def initialize_window_capture(app):
+    """Install the window broker on the QApplication thread before starting workers."""
+    global _window_broker
+    from app.window_capture import WindowCaptureBroker
+    if _window_broker is not None:
+        _window_broker.close()
+    _window_broker = WindowCaptureBroker(app)
+    app.aboutToQuit.connect(_window_broker.close)
+    return _window_broker
+
+
+def _capture_window_frame(hwnd, rect):
+    if _window_broker is None:
+        logger.error('窗口采集尚未初始化 hwnd=%s', hwnd)
+        return None
+    return _window_broker.capture(hwnd, rect)
+
+
+def capture_window(hwnd, left, top, right, bottom):
+    """Scope this rectangle call to an HWND; None explicitly selects the desktop.
+
+    Keeping capture_region's four-argument boundary also lets offline image
+    providers replay the same scan path without requiring a live native window.
+    """
+    previous = getattr(_target, 'hwnd', None)
+    _target.hwnd = hwnd
+    try:
+        return capture_region(left, top, right, bottom)
+    finally:
+        _target.hwnd = previous
+
 
 def capture_region(left: int, top: int, right: int, bottom: int) -> Optional[np.ndarray]:
-    """截取屏幕矩形区域，返回 RGB numpy 数组 (H, W, 3)。"""
+    """Capture the selected backend's rectangle as owned RGB pixels."""
+    hwnd = getattr(_target, 'hwnd', None)
+    if hwnd is not None:
+        return _capture_window_frame(hwnd, (left, top, right, bottom))
     import mss
 
     width = max(1, right - left)

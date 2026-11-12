@@ -1,11 +1,19 @@
 """程序入口。"""
 import sys
 
-from app.window import enable_dpi_awareness
+from app.privileges import ensure_administrator
 from app.version import APP_NAME, VERSION
 
 
+def enable_dpi_awareness():
+    # Do not import window/logger/config until elevation has been checked.
+    from app.window import enable_dpi_awareness as initialize
+    initialize()
+
+
 def main() -> int:
+    if not ensure_administrator():
+        return 1
     enable_dpi_awareness()
 
     verify_once = '--scan-once' in sys.argv
@@ -23,6 +31,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(VERSION)
+    from app.capture import initialize_window_capture
+    initialize_window_capture(app)
 
     win = MainWindow()
     win.show()

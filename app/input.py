@@ -5,10 +5,31 @@ import ctypes
 from ctypes import wintypes
 from functools import lru_cache
 import time
+import threading
 from typing import Optional, Tuple
 
 from app.config import CONFIG
 from app.logger import logger
+from app.window import point_input_error
+
+_target = threading.local()
+
+
+def _point_allowed(hwnd, *point):
+    problem = point_input_error(hwnd, *point)
+    if problem:
+        logger.warning('%s', problem)
+    return not problem
+
+
+def click_window(hwnd, x, y):
+    """Scope an absolute click to its HWND while keeping the two-argument input boundary."""
+    previous = getattr(_target, 'hwnd', None)
+    _target.hwnd = hwnd
+    try:
+        return click(x, y)
+    finally:
+        _target.hwnd = previous
 
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
@@ -117,13 +138,26 @@ def click(x: int, y: int) -> None:
     """在屏幕绝对坐标 (x, y) 处单击左键。"""
     import win32api
     import win32con
+    from app import window
+    hwnd = getattr(_target, 'hwnd', None)
+    if hwnd is not None:
+        problem = window.input_permission_error(hwnd)
+        if problem:
+            raise InputError(problem)
+        if not window.is_foreground(hwnd) or not _point_allowed(hwnd, x, y):
+            raise InputError('游戏未处于前台或点击位置被遮挡，未发送点击')
     win32api.SetCursorPos((x, y))
     time.sleep(0.05)
+    if hwnd is not None and (not window.is_foreground(hwnd) or not _point_allowed(hwnd)):
+        raise InputError('点击前游戏失去前台或鼠标位置被遮挡，未发送点击')
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     try:
         time.sleep(0.05)
     finally:
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        try:
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        except Exception:
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
     time.sleep(0.05)
 
 
@@ -173,9 +207,12 @@ def click_client(rect, point, *, hwnd=None, should_stop=None) -> bool:
         if window.get_window_rect(hwnd) != rect:
             raise InputError('点击前游戏窗口位置发生变化，请重新扫描')
     left, top, right, bottom = rect
-    move_mouse(round(left+x*(right-left)/1920), round(top+y*(bottom-top)/1080))
+    target = (round(left+x*(right-left)/1920), round(top+y*(bottom-top)/1080))
+    if not _point_allowed(hwnd, *target):
+        return False
+    move_mouse(*target)
     time.sleep(.03)
-    if not allowed():
+    if not allowed() or not _point_allowed(hwnd):
         return False
     mouse_event(0x0002)
     try:
@@ -206,5 +243,8 @@ def move_client(rect, point, *, hwnd=None, should_stop=None) -> bool:
         if window.get_window_rect(hwnd) != rect:
             raise InputError('移动鼠标前游戏窗口位置发生变化，请重新扫描')
     left, top, right, bottom = rect
-    move_mouse(round(left+x*(right-left)/1920), round(top+y*(bottom-top)/1080))
-    return allowed()
+    target = (round(left+x*(right-left)/1920), round(top+y*(bottom-top)/1080))
+    if not _point_allowed(hwnd, *target):
+        return False
+    move_mouse(*target)
+    return allowed() and _point_allowed(hwnd)

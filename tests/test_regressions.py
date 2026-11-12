@@ -36,6 +36,11 @@ from app.database import Database
 from app.scanner import Scanner
 from app import excel_export, mysql_export
 from app.ui import main_window
+# Ordinary UI regressions must not depend on the host process token. Permission
+# guard tests override this consumer check locally; production has no bypass.
+UI_ADMINISTRATOR = patch.object(main_window, 'is_administrator', return_value=True)
+UI_ADMINISTRATOR.start()
+atexit.register(UI_ADMINISTRATOR.stop)
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QCloseEvent
 from openpyxl import load_workbook
@@ -48,6 +53,14 @@ CONFIG.fast_scan = False
 CONFIG.fast_ocr = False
 REAL_DRAG = scroller.drag
 REAL_SCROLL_DOWN = scroller.scroll_down
+
+
+def isolate_point_input(stack):
+    """Synthetic HWND tests do not inspect the host desktop's mouse targets."""
+    stack.enter_context(patch.object(game_input, 'point_input_error', return_value=None))
+    stack.enter_context(patch.object(scroller, 'point_input_error', return_value=None))
+
+
 T0, T1, T2 = ('2026-09-20T10:00:00', '2026-09-20T10:01:00', '2026-09-20T10:02:00')
 T3, T4 = '2026-09-20T10:03:00', '2026-09-20T10:04:00'
 
@@ -75,6 +88,7 @@ class Regressions(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        isolate_point_input(self.stack)
         for key, value in dict(bring_to_front=False, ensure_friend_list=False,
                                startup_delay_seconds=0, focus_wait_seconds=0,
                                max_scrolls=8, bottom_confirmations=2,
@@ -636,6 +650,7 @@ class ScreenLayoutRegressions(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        isolate_point_input(self.stack)
         for key, value in dict(ensure_friend_list=True, bring_to_front=False,
                                startup_delay_seconds=0, focus_wait_seconds=0,
                                navigation_max_esc=3, friend_open_attempts=2,
@@ -1093,6 +1108,7 @@ class FastScanRegressions(unittest.TestCase):
         self.layout, self.fast = fast_layout, fast_scan
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        isolate_point_input(self.stack)
         self.work = tempfile.TemporaryDirectory(dir=WORK)
         self.addCleanup(self.work.cleanup)
         for key, value in dict(fast_scan=True, fast_ocr=True, save_scan_evidence=False,
@@ -2028,6 +2044,7 @@ class WorkflowRegressions(unittest.TestCase):
         self.flow = flow
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        isolate_point_input(self.stack)
         self.work = tempfile.TemporaryDirectory(dir=WORK)
         self.addCleanup(self.work.cleanup)
         self.stack.enter_context(patch.object(CONFIG, 'log_dir', self.work.name))
@@ -2497,6 +2514,11 @@ class UidTraversalRegressions(unittest.TestCase):
 
 
 class ProfileLayoutRegressions(unittest.TestCase):
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        isolate_point_input(self.stack)
+
     def test_fixed_fields_never_include_own_uid_or_neighboring_list_text(self):
         from app import profile_layout as P
         frame=np.random.default_rng(19).integers(0,255,(1080,1920,3),dtype=np.uint8)

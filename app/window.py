@@ -118,6 +118,33 @@ def is_foreground(hwnd: int) -> bool:
         return False
 
 
+def point_input_error(hwnd: Optional[int], x=None, y=None) -> Optional[str]:
+    """Require the point's root window to be this exact input target.
+
+    With no coordinates, check the actual cursor after movement. GA_ROOT admits
+    child controls but deliberately does not follow popup ownership (GA_ROOTOWNER).
+    None is reserved for an explicitly selected manual desktop region.
+    """
+    if hwnd is None:
+        return None
+    import win32api
+    import win32gui
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return '目标游戏窗口已关闭，未发送鼠标输入'
+        if x is None and y is None:
+            x, y = win32api.GetCursorPos()
+        if x is None or y is None:
+            return '无法核实鼠标坐标，未发送鼠标输入'
+        hit = win32gui.WindowFromPoint((int(x), int(y)))
+        if not hit or win32gui.GetAncestor(hit, 2) != hwnd:  # GA_ROOT, not GA_ROOTOWNER
+            return '鼠标位置被其他窗口遮挡，未发送鼠标输入；请移开遮挡窗口'
+        return None
+    except Exception as error:
+        logger.warning('无法核实鼠标命中窗口 hwnd=%s: %s', hwnd, error)
+        return '无法核实鼠标命中窗口，未发送鼠标输入'
+
+
 def executable_path(hwnd: int) -> Optional[str]:
     """只读查询选中窗口的程序路径，用于寻找其本机字库。"""
     import win32api

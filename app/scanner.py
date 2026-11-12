@@ -97,7 +97,7 @@ class Scanner:
             self._verify_account_frame(None)
             return
         try:
-            read_current_account(rect, expected_uid=self.account_uid,
+            read_current_account(rect, expected_uid=self.account_uid, hwnd=self._hwnd,
                                  should_continue=self._check_pause)
         except AccountIdentityError:
             self._stop.set()
@@ -312,7 +312,7 @@ class Scanner:
                 if not self._wait(.15) or not self._wait_for_game_foreground():
                     return None
                 rect = self._get_rect()
-                image = capture.capture_region(*rect)
+                image = capture.capture_window(self._hwnd, *rect)
             mode = friend_screen.gameplay_interface_mode(image)
             if mode is not None and mode == previous:
                 return mode
@@ -338,7 +338,7 @@ class Scanner:
             problem = friend_screen.game_window_problem(rect)
             if problem:
                 return self._unsupported_view(problem)
-            img = capture.capture_region(*rect)
+            img = capture.capture_window(self._hwnd, *rect)
             if img is None:
                 self._say('导航截图失败，已停止自动按键')
                 return False
@@ -538,7 +538,7 @@ class Scanner:
             except RuntimeError:
                 note = '目标窗口失效，扫描不完整'
                 break
-            img = capture.capture_region(*rect)
+            img = capture.capture_window(self._hwnd, *rect)
             if img is None:
                 note = '截图失败，扫描不完整'
                 break
@@ -731,7 +731,7 @@ class Scanner:
                 summary['message'] = self._navigation_error
                 break
             rect = self._get_rect()
-            img = capture.capture_region(*rect)
+            img = capture.capture_window(self._hwnd, *rect)
             if img is None:
                 break
             self._verify_account_frame(img)
@@ -777,11 +777,11 @@ class Scanner:
             return None
         opened = False
         try:
-            input.click(entry.click_x + CONFIG.avatar_click_offset_x, entry.click_y)
+            input.click_window(self._hwnd, entry.click_x + CONFIG.avatar_click_offset_x, entry.click_y)
             opened = True
             if not self._wait(CONFIG.menu_wait_seconds):
                 return None
-            img = capture.capture_region(*rect)
+            img = capture.capture_window(self._hwnd, *rect)
             if img is None:
                 return None
             self._verify_account_frame(img)
@@ -790,10 +790,10 @@ class Scanner:
                            for word in CONFIG.view_profile_words)), None)
             if target is None or not self._check_pause():
                 return None
-            input.click(int(target.center[0]) + rect[0], int(target.center[1]) + rect[1])
+            input.click_window(self._hwnd, int(target.center[0]) + rect[0], int(target.center[1]) + rect[1])
             if not self._wait(CONFIG.profile_wait_seconds):
                 return None
-            img = capture.capture_region(*rect)
+            img = capture.capture_window(self._hwnd, *rect)
             if img is None:
                 return None
             self._verify_account_frame(img)

@@ -44,6 +44,7 @@ from app.config import CONFIG, parse_scan_frequency
 from app.accounts import AccountStore
 from app.database import Database
 from app.logger import logger
+from app.privileges import is_administrator
 from app.scanner import ScanResult, Scanner
 from app.status_events import STATUS_CHANGE_LABELS, is_status_change
 from app.ui.region_selector import RegionSelector
@@ -124,6 +125,7 @@ def _fmt_duration(secs) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._administrator = is_administrator()
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(760, 480)
         self.resize(1040, 700)
@@ -185,6 +187,13 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
+        self.admin_warning = QLabel('当前未以管理员身份运行：游戏扫描、初始化档案和账号识别已禁用。'
+                                    '可浏览已有档案和导出；请关闭后以管理员身份重新启动。')
+        self.admin_warning.setWordWrap(True)
+        self.admin_warning.setStyleSheet('color: #8b1d13; background: #fff0dc; border: 2px solid #c23b22; '
+                                        'font-weight: bold; padding: 8px;')
+        self.admin_warning.setVisible(not self._administrator)
+        root.addWidget(self.admin_warning)
         root.addWidget(self._build_control_panel())
         root.addWidget(self._build_stats_panel())
         self.phase_label = QLabel('等待快速扫描')
@@ -482,7 +491,7 @@ class MainWindow(QMainWindow):
     def _sync_task_controls(self) -> None:
         busy = self._task_busy()
         self.account_combo.setEnabled(not busy)
-        self.detect_account_btn.setEnabled(not busy)
+        self.detect_account_btn.setEnabled(self._administrator and not busy)
         self.import_legacy_btn.setEnabled(not busy and bool(self._account_uid))
         self.window_combo.setEnabled(not busy)
         self.find_btn.setEnabled(not busy)
@@ -491,9 +500,11 @@ class MainWindow(QMainWindow):
         self.online_only_checkbox.setEnabled(not busy)
         self.save_profile_checkbox.setEnabled(not busy)
         allowed = bool(self._account_uid) or self.db._path == ':memory:'
-        self.start_btn.setEnabled(allowed and not self._account_reading and not self.scanner.is_uid_scanning
+        self.start_btn.setEnabled(self._administrator and allowed and not self._account_reading and not self.scanner.is_uid_scanning
                                  and not self._profile_importing)
-        self.uid_btn.setEnabled(allowed and not self._account_reading and not self._profile_importing)
+        self.uid_btn.setEnabled(self._administrator and allowed and not self._account_reading and not self._profile_importing)
+        if not self._administrator:
+            self.pause_btn.setEnabled(False)
         self.paste_profile_btn.setEnabled(bool(self._account_uid) and not busy)
         self.profile_paste_shortcut.setEnabled(bool(self._account_uid) and not busy)
 
@@ -555,10 +566,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, '无法切换账号', str(error))
 
     def _detect_account(self) -> None:
-        if self._task_busy():
+        if not self._require_administrator() or self._task_busy():
             return
         hwnd = self.window_combo.currentData()
         rect = self._manual_rect
+        if rect is not None:
+            hwnd = None
         if rect is None and hwnd is not None:
             rect = win32window.get_window_rect(hwnd)
         if not rect:
@@ -574,7 +587,7 @@ class MainWindow(QMainWindow):
         def read_identity():
             try:
                 from app.account_identity import read_current_account
-                result = (read_current_account(rect), None)
+                result = (read_current_account(rect, hwnd=hwnd), None)
             except Exception as error:
                 result = (None, str(error))
             self.bridge.account_identity.emit(result)
@@ -630,6 +643,12 @@ class MainWindow(QMainWindow):
         if self._account_uid or self.db._path == ':memory:':
             return True
         QMessageBox.warning(self, '请先选择账号', '请点击「识别当前账号」读取游戏右下角 UID，再选择该账号点击「快速扫描」。旧数据不会自动归属新账号。')
+        return False
+
+    def _require_administrator(self) -> bool:
+        if self._administrator:
+            return True
+        QMessageBox.warning(self, '需要管理员权限', self.admin_warning.text())
         return False
 
     def _find_windows(self) -> None:
@@ -707,6 +726,8 @@ class MainWindow(QMainWindow):
 
     def _yield_to_game(self) -> None:
         """仍持有用户按钮焦点时交接给游戏，默认保留监控窗口。"""
+        if not self._require_administrator():
+            return
         # 最小化之后再等工作线程的倒计时结束，可能已经失去 Windows
         # 允许切换前台窗口的条件。正常激活请求应在按钮处理期间立即发出。
         # 工作线程仍会独立核验前台状态，激活失败不会发送游戏输入。
@@ -727,7 +748,7 @@ class MainWindow(QMainWindow):
             self.pause_btn.setEnabled(False)
             self._sync_task_controls()
             return
-        if self._account_reading or not self._require_account():
+        if not self._require_administrator() or self._account_reading or not self._require_account():
             return
         try:
             frequency = parse_scan_frequency(self.frequency_edit.text())
@@ -765,6 +786,8 @@ class MainWindow(QMainWindow):
 
     def _toggle_pause(self) -> None:
         """暂停/继续扫描。扫描中按 ESC 键也可切换暂停。"""
+        if not self._require_administrator():
+            return
         if not (self.scanner.is_running or self.scanner.is_uid_scanning):
             self.pause_btn.setEnabled(False)
             self.pause_btn.setText("暂停")
@@ -780,7 +803,7 @@ class MainWindow(QMainWindow):
             self.scanner.stop()
             self.uid_btn.setEnabled(False)
             return
-        if self._account_reading or not self._require_account():
+        if not self._require_administrator() or self._account_reading or not self._require_account():
             return
         hwnd = self.window_combo.currentData()
         if hwnd is None and self._manual_rect is None:

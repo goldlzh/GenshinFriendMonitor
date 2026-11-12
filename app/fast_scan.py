@@ -78,7 +78,7 @@ class FastScan:
     def shot(self):
         self.check()
         rect = self.scanner._get_rect()
-        image = capture.capture_region(*rect)
+        image = capture.capture_window(self.scanner._hwnd, *rect)
         frame = friend_screen.normalize(image)
         if frame is None:
             message = '截图不是完整的 16:9 游戏画面，已停止扫描；请调整游戏分辨率后重新开始。'
